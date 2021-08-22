@@ -1,36 +1,38 @@
 ﻿using System.Collections.Generic;
 using UnityEngine;
-
-public abstract class NestedSOCollectionBase<NestedSOItemT> : ScriptableObject, INestedSOCollection
-	where NestedSOItemT : ScriptableObject
+namespace NestedSO
 {
-	#region Editor Variables
-
-	[SerializeField, HideInInspector]
-	private List<NestedSOItemT> _nestedSOItems = new List<NestedSOItemT>();
-
-	#endregion
-
-	#region Public Methods
-
-	public void AddAsset(ScriptableObject item)
+	public abstract class NestedSOCollectionBase<NestedSOItemT> : ScriptableObject, INestedSOCollection
+	where NestedSOItemT : ScriptableObject
 	{
-		if (item is NestedSOItemT castedItem)
+		#region Editor Variables
+
+		[SerializeField, HideInInspector]
+		private List<NestedSOItemT> _nestedSOItems = new List<NestedSOItemT>();
+
+		#endregion
+
+		#region Public Methods
+
+		public void AddAsset(ScriptableObject item)
 		{
-			_nestedSOItems.Add(castedItem);
+			if (item is NestedSOItemT castedItem)
+			{
+				_nestedSOItems.Add(castedItem);
+			}
 		}
-	}
 
-	public void RemoveAsset(ScriptableObject item)
-	{
-		if (item is NestedSOItemT castedItem)
+		public void RemoveAsset(ScriptableObject item)
 		{
-			_nestedSOItems.Remove(castedItem);
+			if (item is NestedSOItemT castedItem)
+			{
+				_nestedSOItems.Remove(castedItem);
+			}
 		}
+
+		public IReadOnlyList<ScriptableObject> GetRawItems() => _nestedSOItems;
+		public IReadOnlyList<NestedSOItemT> GetItems() => _nestedSOItems;
+
+		#endregion
 	}
-
-	public IReadOnlyList<ScriptableObject> GetRawItems() => _nestedSOItems;
-	public IReadOnlyList<NestedSOItemT> GetItems() => _nestedSOItems;
-
-	#endregion
 }
