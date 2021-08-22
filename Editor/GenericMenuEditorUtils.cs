@@ -1,39 +1,39 @@
-﻿#if UNITY_EDITOR
-
-using System;
+﻿using System;
 using System.Linq;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
 
-public static class GenericMenuEditorUtils
+namespace NestedSO.SOEditor
 {
-	public static GenericMenu CreateSOWindow(Type baseType, GenericMenu.MenuFunction2 SelectionCallback, bool showWindow = false)
+	public static class GenericMenuEditorUtils
 	{
-		Type[] types = baseType.Assembly.GetTypes().Where(x => baseType.IsAssignableFrom(x) && !x.IsAbstract && !x.IsInterface).ToArray();
-
-
-		GenericMenu menu = new GenericMenu();
-		StringBuilder pathString = new StringBuilder();
-		for(int i = 0; i < types.Length; i++)
+		public static GenericMenu CreateSOWindow(Type baseType, GenericMenu.MenuFunction2 SelectionCallback, bool showWindow = false)
 		{
-			Type type = types[i];
+			Type[] types = baseType.Assembly.GetTypes().Where(x => baseType.IsAssignableFrom(x) && !x.IsAbstract && !x.IsInterface).ToArray();
 
-			if(type != baseType && baseType != type.BaseType)
+
+			GenericMenu menu = new GenericMenu();
+			StringBuilder pathString = new StringBuilder();
+			for(int i = 0; i < types.Length; i++)
 			{
-				pathString.Append(type.IsGenericType ? type.GetGenericTypeDefinition().Name : type.BaseType.Name);
-				pathString.Append("/");
+				Type type = types[i];
+
+				if(type != baseType && baseType != type.BaseType)
+				{
+					pathString.Append(type.IsGenericType ? type.GetGenericTypeDefinition().Name : type.BaseType.Name);
+					pathString.Append("/");
+				}
+
+				menu.AddItem(new GUIContent($"{pathString}{type.Name}"), false, SelectionCallback, type);
 			}
 
-			menu.AddItem(new GUIContent($"{pathString}{type.Name}"), false, SelectionCallback, type);
-		}
+			if(showWindow)
+			{
+				menu.ShowAsContext();
+			}
 
-		if(showWindow)
-		{
-			menu.ShowAsContext();
+			return menu;
 		}
-
-		return menu;
 	}
 }
-#endif
