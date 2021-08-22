@@ -1,0 +1,20 @@
+{
+  "name": "rasofiagames.nestedsocollection",
+  "displayName": "NestedSO Collection",
+  "version": "1.0.0",
+  "unity": "2019.4",
+  "description": "A simple tool to for nested ScriptableObjects Support in Unity",
+  "keywords": [
+    "ScriptableObjects",
+    "Editor",
+    "System",
+    "Data",
+    "Properties",
+	"Nested",
+	"SO"
+  ],
+  "author": {
+    "name": "Rasofia Games"
+  },
+  "type": "tool"
+}
