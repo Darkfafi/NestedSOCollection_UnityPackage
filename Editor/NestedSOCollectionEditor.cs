@@ -20,23 +20,27 @@ namespace NestedSO.SOEditor
 
 		private static List<UnityEngine.Object> _breadcrumbs = new List<UnityEngine.Object>();
 		private ReorderableList _orderableList;
+		private SerializedProperty _nestedSOsProperty;
 		private GenericMenu _menu = null;
 		private Type _baseType;
 		private string _baseTypeName;
+		private bool _editMode = false;
+		private Dictionary<UnityEngine.Object, Editor> _cachedEditors = new Dictionary<UnityEngine.Object, Editor>();
+		private bool _isGlobalExpanded = false;
 
 		#endregion
 
 		#region Lifecycle
 
-		protected void OnEnable()
+		protected void OnEnable() //
 		{
 			Load();
-
+			
 			_baseType = serializedObject.targetObject.GetType().BaseType.GetGenericArguments()[0];
 			_baseTypeName = _baseType.Name;
 			_menu = GenericMenuEditorUtils.CreateSOWindow(_baseType, OnItemToCreateSelected);
-
-			_orderableList = new ReorderableList(serializedObject, serializedObject.FindProperty(NestedSOItemsFieldName), true, true, false, false);
+			_nestedSOsProperty = serializedObject.FindProperty(NestedSOItemsFieldName);
+			_orderableList = new ReorderableList(serializedObject, _nestedSOsProperty, true, true, false, false);
 			_orderableList.drawElementCallback = OnDrawNestedItem;
 			_orderableList.drawHeaderCallback = OnDrawHeader;
 
@@ -62,11 +66,131 @@ namespace NestedSO.SOEditor
 		{
 			base.OnInspectorGUI();
 
-			if (_orderableList != null)
+			GUILayout.Space(15);
+
+			EditorGUILayout.BeginVertical("framebox");
 			{
-				GUILayout.Space(15);
-				EditorGUILayout.LabelField("NestedSOCollection Editor", EditorStyles.boldLabel);
+				EditorGUILayout.BeginHorizontal();
+				{
+					EditorGUILayout.LabelField(_baseTypeName + " Collection", EditorStyles.boldLabel);
+					if(_editMode)
+					{
+						if (IconButton(_isGlobalExpanded ? "scenevis_visible_hover@2x" : "scenevis_visible@2x", 20f))
+						{
+							_isGlobalExpanded = !_isGlobalExpanded;
+
+							if (_nestedSOsProperty != null && _nestedSOsProperty.isArray)
+							{
+								for (int i = 0; i < _nestedSOsProperty.arraySize; i++)
+								{
+									var element = _nestedSOsProperty.GetArrayElementAtIndex(i);
+									if(element != null)
+									{
+										element.isExpanded = _isGlobalExpanded;
+									}
+								}
+							}
+						}
+					}
+					if (IconButton("CollabCreate Icon", 20))
+					{
+						_menu.ShowAsContext();
+					}
+					if (IconButton(_editMode ? "CollabMoved Icon" : "CollabEdit Icon", 20))
+					{
+						_editMode = !_editMode;
+					}
+				}
+				EditorGUILayout.EndHorizontal();
 				GUILayout.Space(5);
+
+				if(_editMode)
+				{
+					if (_nestedSOsProperty != null && _nestedSOsProperty.isArray)
+					{
+						for (int i = 0; i < _nestedSOsProperty.arraySize; i++)
+						{
+							DrawSO(_nestedSOsProperty.GetArrayElementAtIndex(i));
+						}
+					}
+				}
+				else if (_orderableList != null)
+				{
+					serializedObject.Update();
+					_orderableList.DoLayoutList();
+					serializedObject.ApplyModifiedProperties();
+				}
+			}
+			EditorGUILayout.EndVertical();
+		}
+
+		#endregion
+
+		#region Private Methods
+
+		private void DrawSO(SerializedProperty serializedProp)
+		{
+			var item = serializedProp.objectReferenceValue;
+
+			if(item == null)
+			{
+				EditorGUILayout.LabelField("Item Empty");
+				return;
+			}
+
+			EditorGUILayout.BeginHorizontal("helpBox");
+			{
+				item.name = EditorGUILayout.TextField(item.name);
+				if(IconButton(serializedProp.isExpanded ? "scenevis_visible_hover@2x" : "scenevis_visible@2x", 20f))
+				{
+					serializedProp.isExpanded = !serializedProp.isExpanded;
+				}
+			}
+			EditorGUILayout.EndHorizontal();
+			if (serializedProp.isExpanded)
+			{
+				if (!_cachedEditors.TryGetValue(item, out Editor editor))
+				{
+					_cachedEditors[item] = editor = CreateEditor(item);
+				}
+				EditorGUILayout.BeginVertical("frameBox");
+				{
+					editor.OnInspectorGUI();
+					editor.serializedObject.ApplyModifiedProperties();
+				}
+				EditorGUILayout.EndVertical();
+			}
+		}
+
+
+		private void OnDrawHeader(Rect rect)
+		{
+			GUILayout.BeginHorizontal();
+			{
+				int currentWidth = 0;
+				int btnSize = 20;
+
+				if (_breadcrumbs.Count > 1)
+				{
+					currentWidth += btnSize;
+
+					if (IconButton(new Rect(rect.width - currentWidth, rect.y, btnSize, EditorGUIUtility.singleLineHeight), "back@2x"))
+					{
+						Selection.activeObject = _breadcrumbs[_breadcrumbs.Count - 2];
+					}
+
+					currentWidth += btnSize;
+
+					if (_breadcrumbs.Count > 2)
+					{
+						if (IconButton(new Rect(rect.width - currentWidth, rect.y, btnSize, EditorGUIUtility.singleLineHeight), "beginButton"))
+						{
+							Selection.activeObject = _breadcrumbs[0];
+						}
+					}
+
+					currentWidth += btnSize * 2;
+				}
 
 				StringBuilder sb = new StringBuilder();
 
@@ -79,50 +203,7 @@ namespace NestedSO.SOEditor
 					sb.Append(_breadcrumbs[i].name);
 				}
 
-				GUILayout.Label(sb.ToString());
-
-				serializedObject.Update();
-				_orderableList.DoLayoutList();
-				serializedObject.ApplyModifiedProperties();
-			}
-		}
-
-		#endregion
-
-		#region Private Methods
-
-		private void OnDrawHeader(Rect rect)
-		{
-			GUILayout.BeginHorizontal();
-			{
-				EditorGUI.LabelField(rect, _baseTypeName + " Collection");
-
-				int currentWidth = 0;
-				int btnSize = 20;
-
-				if (IconButton(new Rect(rect.width, rect.y, btnSize, EditorGUIUtility.singleLineHeight), "CollabCreate Icon"))
-				{
-					_menu.ShowAsContext();
-				}
-
-				currentWidth += btnSize;
-
-				if (_breadcrumbs.Count > 1)
-				{
-					if (IconButton(new Rect(rect.width - currentWidth, rect.y, btnSize, EditorGUIUtility.singleLineHeight), "back@2x"))
-					{
-						Selection.activeObject = _breadcrumbs[_breadcrumbs.Count - 2];
-					}
-					currentWidth += btnSize;
-
-					if (_breadcrumbs.Count > 2)
-					{
-						if (IconButton(new Rect(rect.width - currentWidth, rect.y, btnSize, EditorGUIUtility.singleLineHeight), "beginButton"))
-						{
-							Selection.activeObject = _breadcrumbs[0];
-						}
-					}
-				}
+				GUI.Label(new Rect(rect.x, rect.y, rect.width - currentWidth, EditorGUIUtility.singleLineHeight), sb.ToString());
 			}
 			GUILayout.EndHorizontal();
 		}
@@ -232,6 +313,11 @@ namespace NestedSO.SOEditor
 		private bool IconButton(Rect rect, string icon)
 		{
 			return GUI.Button(rect, EditorGUIUtility.FindTexture(icon), new GUIStyle("label"));
+		}
+
+		private bool IconButton(string icon, float size)
+		{
+			return GUILayout.Button(EditorGUIUtility.FindTexture(icon), new GUIStyle("label"), GUILayout.MaxWidth(size), GUILayout.MaxHeight(size));
 		}
 
 		#endregion
