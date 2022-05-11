@@ -24,7 +24,7 @@ namespace NestedSO.SOEditor
 		private GenericMenu _menu = null;
 		private Type _baseType;
 		private string _baseTypeName;
-		private bool _editMode = false;
+		private bool _editMode = true;
 		private Dictionary<UnityEngine.Object, Editor> _cachedEditors = new Dictionary<UnityEngine.Object, Editor>();
 		private bool _isGlobalExpanded = false;
 
@@ -32,11 +32,29 @@ namespace NestedSO.SOEditor
 
 		#region Lifecycle
 
-		protected void OnEnable() //
+		protected void OnEnable()
 		{
 			Load();
-			
-			_baseType = serializedObject.targetObject.GetType().BaseType.GetGenericArguments()[0];
+
+			_baseType = serializedObject.targetObject.GetType();
+			Type[] types = null;
+
+			while(_baseType != null && (types == null || types.Length == 0))
+			{
+				_baseType = _baseType.BaseType;
+				if(_baseType != null && _baseType.IsGenericType && _baseType.GetGenericTypeDefinition() == typeof(NestedSOCollectionBase<>))
+				{
+					types = _baseType.GetGenericArguments();
+				}
+			}
+
+			if(types == null || types.Length == 0)
+			{
+				return;
+			}
+
+			_baseType = types[0];
+
 			_baseTypeName = _baseType.Name;
 			_menu = GenericMenuEditorUtils.CreateSOWindow(_baseType, OnItemToCreateSelected);
 			_nestedSOsProperty = serializedObject.FindProperty(NestedSOItemsFieldName);
@@ -65,6 +83,12 @@ namespace NestedSO.SOEditor
 		public override void OnInspectorGUI()
 		{
 			base.OnInspectorGUI();
+
+			if(_baseType == null)
+			{
+				GUILayout.Label("Unable to Load BaseType");
+				return;
+			}
 
 			GUILayout.Space(15);
 
@@ -272,6 +296,14 @@ namespace NestedSO.SOEditor
 
 			EditorUtility.SetDirty(serializedObject.targetObject);
 			EditorUtility.SetDirty(nestedSOItemInstance);
+
+			serializedObject.Update();
+
+			if(_nestedSOsProperty != null && _nestedSOsProperty.isArray && _nestedSOsProperty.arraySize > 0)
+			{
+				SerializedProperty prop = _nestedSOsProperty.GetArrayElementAtIndex(_nestedSOsProperty.arraySize - 1);
+				prop.isExpanded = _isGlobalExpanded;
+			}
 		}
 
 		private void Save()
