@@ -128,6 +128,8 @@ namespace NestedSO.SOEditor
 				EditorGUILayout.EndHorizontal();
 				GUILayout.Space(5);
 
+				serializedObject.Update();
+
 				if(_editMode)
 				{
 					if (_nestedSOsProperty != null && _nestedSOsProperty.isArray)
@@ -140,10 +142,9 @@ namespace NestedSO.SOEditor
 				}
 				else if (_orderableList != null)
 				{
-					serializedObject.Update();
 					_orderableList.DoLayoutList();
-					serializedObject.ApplyModifiedProperties();
 				}
+				serializedObject.ApplyModifiedProperties();
 			}
 			EditorGUILayout.EndVertical();
 		}
