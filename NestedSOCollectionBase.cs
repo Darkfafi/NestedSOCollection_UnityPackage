@@ -5,8 +5,8 @@ using UnityEngine;
 
 namespace NestedSO
 {
-	public abstract class NestedSOCollectionBase<NestedSOItemT> : ScriptableObject, INestedSOCollection, IReadOnlyList<NestedSOItemT>
-	where NestedSOItemT : ScriptableObject
+	public abstract class NestedSOCollectionBase<NestedSOItemT> : NestedSOCollectionBase, IReadOnlyList<NestedSOItemT>
+		where NestedSOItemT : ScriptableObject
 	{
 		#region Editor Variables
 
@@ -23,7 +23,7 @@ namespace NestedSO
 
 		#region Public Methods
 
-		public void AddAsset(ScriptableObject item)
+		public override void AddAsset(ScriptableObject item)
 		{
 			if(item is NestedSOItemT castedItem)
 			{
@@ -31,7 +31,7 @@ namespace NestedSO
 			}
 		}
 
-		public void RemoveAsset(ScriptableObject item)
+		public override void RemoveAsset(ScriptableObject item)
 		{
 			if(item is NestedSOItemT castedItem)
 			{
@@ -129,12 +129,19 @@ namespace NestedSO
 			return castedItems;
 		}
 
-		public IReadOnlyList<ScriptableObject> GetRawItems() => _nestedSOItems;
+		public override IReadOnlyList<ScriptableObject> GetRawItems() => _nestedSOItems;
 		public IReadOnlyList<NestedSOItemT> GetItems() => _nestedSOItems;
 		public NestedSOItemT this[int index] => _nestedSOItems[index];
 		public IEnumerator<NestedSOItemT> GetEnumerator() => _nestedSOItems.GetEnumerator();
 		IEnumerator IEnumerable.GetEnumerator() => _nestedSOItems.GetEnumerator();
 
 		#endregion
+	}
+	
+	public abstract class NestedSOCollectionBase : ScriptableObject, INestedSOCollection
+	{
+		public abstract void AddAsset(ScriptableObject item);
+		public abstract IReadOnlyList<ScriptableObject> GetRawItems();
+		public abstract void RemoveAsset(ScriptableObject item);
 	}
 }
