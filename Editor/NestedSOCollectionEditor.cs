@@ -7,7 +7,7 @@ using UnityEngine;
 
 namespace NestedSO.SOEditor
 {
-	[CustomEditor(typeof(NestedSOCollectionBase<>), true)]
+	[CustomEditor(typeof(NestedSOCollectionBase), true)]
 	public class NestedSOCollectionEditor : Editor
 	{
 		#region Consts
