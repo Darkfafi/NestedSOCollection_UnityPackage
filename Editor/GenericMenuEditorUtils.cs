@@ -10,9 +10,7 @@ namespace NestedSO.SOEditor
 	{
 		public static GenericMenu CreateSOWindow(Type baseType, GenericMenu.MenuFunction2 SelectionCallback, bool showWindow = false)
 		{
-			Type[] types = baseType.Assembly.GetTypes().Where(x => baseType.IsAssignableFrom(x) && !x.IsAbstract && !x.IsInterface).ToArray();
-
-
+			Type[] types = AppDomain.CurrentDomain.GetAssemblies().SelectMany(x => x.GetTypes()).Where(x => baseType.IsAssignableFrom(x) && !x.IsAbstract && !x.IsInterface).ToArray();
 			GenericMenu menu = new GenericMenu();
 			StringBuilder pathString = new StringBuilder();
 			for(int i = 0; i < types.Length; i++)
