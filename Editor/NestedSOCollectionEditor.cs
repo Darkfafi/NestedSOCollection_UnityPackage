@@ -134,8 +134,19 @@ namespace NestedSO.SOEditor
 				{
 					if (_nestedSOsProperty != null && _nestedSOsProperty.isArray)
 					{
-						for (int i = 0; i < _nestedSOsProperty.arraySize; i++)
+						int size = _nestedSOsProperty.arraySize;
+						for (int i = 0; i < size; i++)
 						{
+							if(_nestedSOsProperty == null)
+							{
+								break;
+							}
+
+							if(_nestedSOsProperty.arraySize != size)
+							{
+								break;
+							}
+
 							DrawSO(_nestedSOsProperty.GetArrayElementAtIndex(i));
 						}
 					}
