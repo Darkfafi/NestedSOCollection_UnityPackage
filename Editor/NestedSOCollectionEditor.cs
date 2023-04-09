@@ -36,7 +36,15 @@ namespace NestedSO.SOEditor
 		{
 			Load();
 
-			_baseType = serializedObject.targetObject.GetType();
+			try
+			{
+				_baseType = serializedObject.targetObject.GetType();
+			}
+			catch
+			{
+				_baseType = null;
+			}
+
 			Type[] types = null;
 
 			while(_baseType != null && (types == null || types.Length == 0))
