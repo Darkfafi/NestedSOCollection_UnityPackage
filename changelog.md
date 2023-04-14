@@ -1,5 +1,8 @@
 # Changelog NestedSOCollection
 
+## v1.3.3 - 14/04/2023
+* Fixed exceptions when a scene is loaded while inspecting a collection & during some recompile steps
+
 ## v1.3.2 - 06/04/2023
 * Fixed exception when a scene is loaded while inspecting a collection
 
