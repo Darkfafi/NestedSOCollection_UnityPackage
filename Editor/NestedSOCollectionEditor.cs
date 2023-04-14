@@ -150,9 +150,16 @@ namespace NestedSO.SOEditor
 								break;
 							}
 
-							if(_nestedSOsProperty.arraySize != size)
+							try
 							{
-								break;
+								if(_nestedSOsProperty.arraySize != size)
+								{
+									break;
+								}
+							}
+							catch
+							{
+								return;
 							}
 
 							DrawSO(_nestedSOsProperty.GetArrayElementAtIndex(i));
