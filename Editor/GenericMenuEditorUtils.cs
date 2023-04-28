@@ -24,6 +24,7 @@ namespace NestedSO.SOEditor
 				}
 
 				menu.AddItem(new GUIContent($"{pathString}{type.Name}"), false, SelectionCallback, type);
+				pathString.Clear();
 			}
 
 			if(showWindow)
