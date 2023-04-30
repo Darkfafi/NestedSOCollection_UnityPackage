@@ -1,4 +1,5 @@
-﻿using System;
+﻿#if UNITY_EDITOR
+using System;
 using System.Collections.Generic;
 using System.Text;
 using UnityEditor;
@@ -36,32 +37,14 @@ namespace NestedSO.SOEditor
 		{
 			Load();
 
-			try
-			{
-				_baseType = serializedObject.targetObject.GetType();
-			}
-			catch
-			{
-				_baseType = null;
-			}
+			Type baseType = GetBaseTypeFromCollection(serializedObject.targetObject as NestedSOCollectionBase);
 
-			Type[] types = null;
-
-			while(_baseType != null && (types == null || types.Length == 0))
-			{
-				_baseType = _baseType.BaseType;
-				if(_baseType != null && _baseType.IsGenericType && _baseType.GetGenericTypeDefinition() == typeof(NestedSOCollectionBase<>))
-				{
-					types = _baseType.GetGenericArguments();
-				}
-			}
-
-			if(types == null || types.Length == 0)
+			if(baseType == null)
 			{
 				return;
 			}
 
-			_baseType = types[0];
+			_baseType = baseType;
 
 			_baseTypeName = _baseType.Name;
 			_menu = GenericMenuEditorUtils.CreateSOWindow(_baseType, OnItemToCreateSelected);
@@ -177,7 +160,115 @@ namespace NestedSO.SOEditor
 
 		#endregion
 
+		#region Public Methods
+
+		public static void RemoveAssetFromCollection(NestedSOCollectionBase collection, ScriptableObject asset)
+		{
+			if(!collection._HasAsset(asset))
+			{
+				throw new Exception($"Collection {collection} does not contains asset {asset}");
+			}
+
+			RemoveAssetRecursive(collection, asset);
+			AssetDatabase.SaveAssets();
+			EditorUtility.SetDirty(collection);
+		}
+
+		public static ScriptableObject AddAssetToCollection(NestedSOCollectionBase collection, Type type)
+		{
+			Type baseType = GetBaseTypeFromCollection(collection);
+
+			if(baseType == null)
+			{
+				throw new Exception($"No BaseType could be found for {collection}");
+			}
+
+			if(!baseType.IsAssignableFrom(type))
+			{
+				throw new Exception($"The collection requires BaseType {baseType}, which {type} does not derive from");
+			}
+
+			if(type.IsAbstract)
+			{
+				throw new Exception($"{type} is abstract, which can't be used to Create an Asset.");
+			}
+
+			if(type.IsInterface)
+			{
+				throw new Exception($"{type} is an interface, which can't be used to Create an Asset.");
+			}
+
+			ScriptableObject nestedSOItemInstance = CreateInstance(type);
+			nestedSOItemInstance.name = "New " + type.Name;
+			collection._AddAsset(nestedSOItemInstance);
+			
+			AssetDatabase.AddObjectToAsset(nestedSOItemInstance, collection);
+			AssetDatabase.SaveAssets();
+
+			EditorUtility.SetDirty(collection);
+			EditorUtility.SetDirty(nestedSOItemInstance);
+
+			collection._MarkAsAddedAsset(nestedSOItemInstance);
+			return nestedSOItemInstance;
+		}
+
+		public static Type GetBaseTypeFromCollection(NestedSOCollectionBase collection)
+		{
+			if(collection == null)
+			{
+				return null;
+			}
+
+			Type baseType;
+			try
+			{
+				baseType = collection.GetType();
+			}
+			catch
+			{
+				baseType = null;
+			}
+
+			Type[] types = null;
+
+			while(baseType != null && (types == null || types.Length == 0))
+			{
+				baseType = baseType.BaseType;
+				if(baseType != null && baseType.IsGenericType && baseType.GetGenericTypeDefinition() == typeof(NestedSOCollectionBase<>))
+				{
+					types = baseType.GetGenericArguments();
+				}
+			}
+
+			if(types == null || types.Length == 0)
+			{
+				return null;
+			}
+
+			return types[0];
+		}
+
+		#endregion
+
 		#region Private Methods
+
+		private static void RemoveAssetRecursive(NestedSOCollectionBase collection, ScriptableObject nestedItem)
+		{
+			if(nestedItem is NestedSOCollectionBase internalCollection)
+			{
+				IReadOnlyList<ScriptableObject> internalCollectionItems = internalCollection.GetRawItems();
+				for(int i = internalCollectionItems.Count - 1; i >= 0; i--)
+				{
+					RemoveAssetRecursive(internalCollection, internalCollectionItems[i]);
+				}
+			}
+
+			collection._RemoveAsset(nestedItem);
+			AssetDatabase.RemoveObjectFromAsset(nestedItem);
+			EditorUtility.SetDirty(nestedItem);
+
+			collection._MarkAsRemovedAsset(nestedItem);
+		}
 
 		private void DrawSO(SerializedProperty serializedProp)
 		{
@@ -212,7 +303,6 @@ namespace NestedSO.SOEditor
 				EditorGUILayout.EndVertical();
 			}
 		}
-
 
 		private void OnDrawHeader(Rect rect)
 		{
@@ -279,10 +369,7 @@ namespace NestedSO.SOEditor
 			currentWidth = bWidth;
 			if (IconButton(new Rect(rect.x + rect.width - bWidth, rect.y, bWidth, EditorGUIUtility.singleLineHeight), "CollabDeleted Icon"))
 			{
-				INestedSOCollection collection = serializedObject.targetObject as INestedSOCollection;
-				RemoveItem(collection, nestedItem);
-				AssetDatabase.SaveAssets();
-				EditorUtility.SetDirty(serializedObject.targetObject);
+				RemoveAssetFromCollection(serializedObject.targetObject as NestedSOCollectionBase, nestedItem);
 			}
 
 			if (IconButton(new Rect(rect.x + rect.width - bWidth - currentWidth, rect.y, bWidth, EditorGUIUtility.singleLineHeight), "d_CollabEdit Icon"))
@@ -293,36 +380,11 @@ namespace NestedSO.SOEditor
 			}
 		}
 
-		private void RemoveItem(INestedSOCollection collection, ScriptableObject nestedItem)
-		{
-			if (nestedItem is INestedSOCollection internalCollection)
-			{
-				IReadOnlyList<ScriptableObject> internalCollectionItems = internalCollection.GetRawItems();
-				for (int i = internalCollectionItems.Count - 1; i >= 0; i--)
-				{
-					RemoveItem(internalCollection, internalCollectionItems[i]);
-				}
-			}
-
-			collection.RemoveAsset(nestedItem);
-			AssetDatabase.RemoveObjectFromAsset(nestedItem);
-			EditorUtility.SetDirty(nestedItem);
-		}
-
 		private void OnItemToCreateSelected(object userData)
 		{
-			INestedSOCollection collection = serializedObject.targetObject as INestedSOCollection;
-
+			NestedSOCollectionBase collection = serializedObject.targetObject as NestedSOCollectionBase;
 			Type type = userData as Type;
-			ScriptableObject nestedSOItemInstance = CreateInstance(type);
-			nestedSOItemInstance.name = "New " + type.Name;
-			collection.AddAsset(nestedSOItemInstance);
-
-			AssetDatabase.AddObjectToAsset(nestedSOItemInstance, serializedObject.targetObject);
-			AssetDatabase.SaveAssets();
-
-			EditorUtility.SetDirty(serializedObject.targetObject);
-			EditorUtility.SetDirty(nestedSOItemInstance);
+			AddAssetToCollection(collection, type);
 
 			serializedObject.Update();
 
@@ -382,3 +444,4 @@ namespace NestedSO.SOEditor
 		#endregion
 	}
 }
+#endif

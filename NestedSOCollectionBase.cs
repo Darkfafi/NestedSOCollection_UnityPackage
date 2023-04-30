@@ -21,9 +21,9 @@ namespace NestedSO
 
 		#endregion
 
-		#region Public Methods
+		#region Internal Methods
 
-		public override void AddAsset(ScriptableObject item)
+		internal override void _AddAsset(ScriptableObject item)
 		{
 			if(item is NestedSOItemT castedItem)
 			{
@@ -31,13 +31,42 @@ namespace NestedSO
 			}
 		}
 
-		public override void RemoveAsset(ScriptableObject item)
+		internal override void _RemoveAsset(ScriptableObject item)
 		{
 			if(item is NestedSOItemT castedItem)
 			{
 				_nestedSOItems.Remove(castedItem);
 			}
 		}
+
+		internal override bool _HasAsset(ScriptableObject item)
+		{
+			if(item is NestedSOItemT castedItem)
+			{
+				return _nestedSOItems.Contains(castedItem);
+			}
+			return false;
+		}
+
+		internal override void _MarkAsAddedAsset(ScriptableObject item)
+		{
+			if(item is NestedSOItemT castedAsset)
+			{
+				OnAddedAsset(castedAsset);
+			}
+		}
+
+		internal override void _MarkAsRemovedAsset(ScriptableObject item)
+		{
+			if(item is NestedSOItemT castedAsset)
+			{
+				OnRemovedAsset(castedAsset);
+			}
+		}
+
+		#endregion
+
+		#region Public Methods
 
 		public void ForEach(Action<NestedSOItemT> action)
 		{
@@ -136,12 +165,30 @@ namespace NestedSO
 		IEnumerator IEnumerable.GetEnumerator() => _nestedSOItems.GetEnumerator();
 
 		#endregion
+
+		#region Protected Methods
+
+		protected virtual void OnAddedAsset(NestedSOItemT asset)
+		{
+		
+		}
+
+		protected virtual void OnRemovedAsset(NestedSOItemT asset)
+		{
+
+		}
+
+		#endregion
 	}
-	
-	public abstract class NestedSOCollectionBase : ScriptableObject, INestedSOCollection
+
+	public abstract class NestedSOCollectionBase : ScriptableObject
 	{
-		public abstract void AddAsset(ScriptableObject item);
 		public abstract IReadOnlyList<ScriptableObject> GetRawItems();
-		public abstract void RemoveAsset(ScriptableObject item);
+		internal abstract void _MarkAsAddedAsset(ScriptableObject item);
+		internal abstract void _AddAsset(ScriptableObject item);
+
+		internal abstract void _MarkAsRemovedAsset(ScriptableObject item);
+		internal abstract void _RemoveAsset(ScriptableObject item);
+		internal abstract bool _HasAsset(ScriptableObject item);
 	}
 }
