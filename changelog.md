@@ -1,5 +1,13 @@
 # Changelog NestedSOCollection
 
+## v1.4.0 - 30/04/2023
+* Corrected namespace categorizing issue within the GenericMenuEditorUtils
+* Removed INestedSOCollection interface.
+* Removed NestedSO.Editor Assembly
+* Made AddAsset & RemoveAsset methods inaccessible from outside the package.
+  * To hook into Adding / Removing, override OnAddedAsset & OnRemovedAsset methods instead
+* Added AddAssetToCollection and RemoveAssetFromCollection methods to the NestedSOCollectionEditor to allow for adding and removing assets through code (within the Editor)
+
 ## v1.3.3 - 14/04/2023
 * Fixed exceptions when a scene is loaded while inspecting a collection & during some recompile steps
 
