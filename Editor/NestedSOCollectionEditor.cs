@@ -174,6 +174,12 @@ namespace NestedSO.SOEditor
 			EditorUtility.SetDirty(collection);
 		}
 
+		public static T AddAssetToCollection<T>(NestedSOCollectionBase collection)
+			where T : ScriptableObject
+		{
+			return AddAssetToCollection(collection, typeof(T)) as T;
+		}
+
 		public static ScriptableObject AddAssetToCollection(NestedSOCollectionBase collection, Type type)
 		{
 			Type baseType = GetBaseTypeFromCollection(collection);
