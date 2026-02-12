@@ -57,7 +57,9 @@ namespace NestedSO.SOEditor
 
 		protected void OnEnable()
 		{
-			NestedSOCollectionBase targetCollection = serializedObject.targetObject as NestedSOCollectionBase;
+			if (target == null) return;
+
+			NestedSOCollectionBase targetCollection = target as NestedSOCollectionBase;
 			if (targetCollection == null) return;
 
 			LoadNavigationState(targetCollection);
@@ -80,7 +82,6 @@ namespace NestedSO.SOEditor
 
 			EnsureRootIsTarget(targetCollection);
 		}
-
 		private void EnsureRootIsTarget(UnityEngine.Object target)
 		{
 			if (_breadcrumbs.Count == 0)
@@ -101,6 +102,8 @@ namespace NestedSO.SOEditor
 				GUILayout.Label("Unable to Load BaseType");
 				return;
 			}
+
+			DrawDefaultInspector();
 
 			DrawBreadcrumbs();
 			GUILayout.Space(5);
@@ -655,6 +658,8 @@ namespace NestedSO.SOEditor
 
 		private static void RemoveAssetRecursive(NestedSOCollectionBase collection, ScriptableObject nestedItem)
 		{
+			if (nestedItem == null) return;
+
 			if (nestedItem is NestedSOCollectionBase internalCollection)
 			{
 				IReadOnlyList<ScriptableObject> internalCollectionItems = internalCollection.GetRawItems();
@@ -663,10 +668,45 @@ namespace NestedSO.SOEditor
 					RemoveAssetRecursive(internalCollection, internalCollectionItems[i]);
 				}
 			}
-			collection._RemoveAsset(nestedItem);
+
+			var fields = nestedItem.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+			foreach (var field in fields)
+			{
+				if (typeof(NestedSOListBase).IsAssignableFrom(field.FieldType))
+				{
+					var listWrapper = field.GetValue(nestedItem);
+					if (listWrapper != null)
+					{
+						var itemsField = field.FieldType.GetField("Items");
+						if (itemsField != null)
+						{
+							var list = itemsField.GetValue(listWrapper) as System.Collections.IList;
+							if (list != null)
+							{
+								for (int i = list.Count - 1; i >= 0; i--)
+								{
+									var child = list[i] as ScriptableObject;
+									if (child != null)
+									{
+										RemoveAssetRecursive(collection, child);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if (collection._HasAsset(nestedItem))
+			{
+				collection._RemoveAsset(nestedItem);
+				collection._MarkAsRemovedAsset(nestedItem);
+			}
+
 			AssetDatabase.RemoveObjectFromAsset(nestedItem);
-			EditorUtility.SetDirty(nestedItem);
-			collection._MarkAsRemovedAsset(nestedItem);
+			GameObject.DestroyImmediate(nestedItem, true);
+
+			EditorUtility.SetDirty(collection);
 		}
 
 		private void SaveNavigationState()

@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEditor;
 using UnityEditorInternal;
@@ -7,7 +8,6 @@ using UnityEngine;
 
 namespace NestedSO.SOEditor
 {
-    // Targets the Base class to work for all generic variations
     [CustomPropertyDrawer(typeof(NestedSOListBase), true)]
     public class NestedSOListDrawer : PropertyDrawer
     {
@@ -17,50 +17,39 @@ namespace NestedSO.SOEditor
         public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
         {
             if (!_isExpanded) return EditorGUIUtility.singleLineHeight;
-            
             SerializedProperty listProp = property.FindPropertyRelative("Items");
-            if (_list == null) InitList(listProp);
-            
-            // Height = Title + List + Padding
+            if (_list == null) InitList(listProp, property);
             return EditorGUIUtility.singleLineHeight + _list.GetHeight() + 5;
         }
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
             SerializedProperty listProp = property.FindPropertyRelative("Items");
-            
             EditorGUI.BeginProperty(position, label, property);
 
-            // Foldout Title
             Rect titleRect = new Rect(position.x, position.y, position.width, EditorGUIUtility.singleLineHeight);
             string count = listProp != null ? listProp.arraySize.ToString() : "0";
             _isExpanded = EditorGUI.Foldout(titleRect, _isExpanded, $"{label.text} [{count}]", true);
 
             if (_isExpanded)
             {
-                if (_list == null) InitList(listProp);
-                
-                // Draw List below title
+                if (_list == null) InitList(listProp, property);
                 Rect listRect = new Rect(position.x, position.y + EditorGUIUtility.singleLineHeight + 2, position.width, position.height - EditorGUIUtility.singleLineHeight - 2);
                 _list.DoList(listRect);
             }
-
             EditorGUI.EndProperty();
         }
 
-        private void InitList(SerializedProperty listProp)
+        private void InitList(SerializedProperty listProp, SerializedProperty wrapperProp)
         {
             _list = new ReorderableList(listProp.serializedObject, listProp, true, true, true, true);
-            
-            _list.drawHeaderCallback = (Rect r) => 
+
+            _list.drawHeaderCallback = (Rect r) =>
             {
                 EditorGUI.LabelField(r, "Items");
-                
-                // 'Open All' Button in Header
-                Rect btnRect = new Rect(r.x + r.width - 100, r.y, 100, r.height);
-                if (GUI.Button(btnRect, "Open Window", EditorStyles.miniButton))
+                if (GUI.Button(new Rect(r.x + r.width - 100, r.y, 100, r.height), "Open Editor", EditorStyles.miniButton))
                 {
-                    NestedSOCollectionWindow.Open(listProp);
+                    NestedSOCollectionWindow.Open(wrapperProp);
                 }
             };
 
@@ -69,27 +58,12 @@ namespace NestedSO.SOEditor
                 if (index >= listProp.arraySize) return;
                 SerializedProperty element = listProp.GetArrayElementAtIndex(index);
                 ScriptableObject item = element.objectReferenceValue as ScriptableObject;
+                if (item == null) { EditorGUI.LabelField(rect, "Null"); return; }
 
-                if (item == null)
-                {
-                    EditorGUI.LabelField(rect, "Null / Empty");
-                    return;
-                }
-
-                // Name Field
-                float btnWidth = 50;
-                float nameWidth = rect.width - btnWidth - 30; // 30 for delete button roughly
-                
-                // Editable Name directly in list
-                string newName = EditorGUI.TextField(new Rect(rect.x, rect.y + 1, nameWidth, EditorGUIUtility.singleLineHeight), item.name);
+                float btnW = 50;
+                float nameW = rect.width - btnW - 5;
+                string newName = EditorGUI.TextField(new Rect(rect.x, rect.y + 1, nameW, EditorGUIUtility.singleLineHeight), item.name);
                 if (newName != item.name) { item.name = newName; EditorUtility.SetDirty(item); }
-
-                // "Open" Button
-                Rect openRect = new Rect(rect.x + rect.width - btnWidth, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
-                if (GUI.Button(openRect, "Edit", EditorStyles.miniButton))
-                {
-                    NestedSOCollectionWindow.OpenItem(listProp, item);
-                }
             };
 
             _list.onAddDropdownCallback = (Rect r, ReorderableList l) => ShowAddMenu(listProp);
@@ -98,18 +72,13 @@ namespace NestedSO.SOEditor
 
         private void ShowAddMenu(SerializedProperty listProp)
         {
-            // Determine 'T' from NestedSOList<T>
             Type listType = null;
             if (typeof(NestedSOListBase).IsAssignableFrom(fieldInfo.FieldType))
             {
                 var itemsField = fieldInfo.FieldType.GetField("Items");
-                if (itemsField != null)
-                {
-                   if (itemsField.FieldType.IsGenericType) 
-                       listType = itemsField.FieldType.GetGenericArguments()[0];
-                }
+                if (itemsField != null && itemsField.FieldType.IsGenericType)
+                    listType = itemsField.FieldType.GetGenericArguments()[0];
             }
-
             if (listType == null) return;
 
             GenericMenu menu = new GenericMenu();
@@ -127,7 +96,6 @@ namespace NestedSO.SOEditor
             newAsset.name = "New " + type.Name;
             AssetDatabase.AddObjectToAsset(newAsset, listProp.serializedObject.targetObject);
             AssetDatabase.SaveAssets();
-
             listProp.arraySize++;
             SerializedProperty element = listProp.GetArrayElementAtIndex(listProp.arraySize - 1);
             element.objectReferenceValue = newAsset;
@@ -138,13 +106,15 @@ namespace NestedSO.SOEditor
         {
             SerializedProperty element = listProp.GetArrayElementAtIndex(index);
             ScriptableObject asset = element.objectReferenceValue as ScriptableObject;
+
             if (asset != null)
             {
-                AssetDatabase.RemoveObjectFromAsset(asset);
-                GameObject.DestroyImmediate(asset, true);
+                NestedSOAssetUtils.DestroyAsset(asset);
             }
+
             element.objectReferenceValue = null;
             listProp.DeleteArrayElementAtIndex(index);
+            
             listProp.serializedObject.ApplyModifiedProperties();
             AssetDatabase.SaveAssets();
         }

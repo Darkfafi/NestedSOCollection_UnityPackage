@@ -1,12 +1,12 @@
 #if UNITY_EDITOR
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using UnityEditor;
+using UnityEditorInternal;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
-#endif
-
-#if UNITY_EDITOR
 
 namespace NestedSO.SOEditor
 {
@@ -14,21 +14,22 @@ namespace NestedSO.SOEditor
     {
         private SerializedObject _targetSO;
         private string _propertyPath;
-        private SerializedProperty _listProperty;
+        private SerializedProperty _listWrapperProperty;
+        private SerializedProperty _itemsListProperty;
 
-        // State
+        private ReorderableList _reorderableList;
+        private Vector2 _scrollPosition;
+
+        // Search & Navigation
         private SearchField _searchField;
         private string _searchString = "";
         private List<SearchMatch> _filteredItems = new List<SearchMatch>();
         private List<UnityEngine.Object> _breadcrumbs = new List<UnityEngine.Object>();
         private Dictionary<UnityEngine.Object, Editor> _editorCache = new Dictionary<UnityEngine.Object, Editor>();
-        
+
         // Mass Edit
         private string _massEditPropertyPath;
         private bool _massEditExpanded = true;
-        
-        // Scroll State
-        private Vector2 _scrollPosition;
 
         private class SearchMatch
         {
@@ -36,25 +37,41 @@ namespace NestedSO.SOEditor
             public List<string> MatchDetails = new List<string>();
         }
 
-        public static void Open(SerializedProperty listProperty)
+        public static void Open(SerializedProperty listWrapperProperty)
+        {
+            if (HasOpenInstances<NestedSOCollectionWindow>())
+            {
+                var win = GetWindow<NestedSOCollectionWindow>();
+                win.Focus();
+                win.Init(listWrapperProperty);
+            }
+            else
+            {
+                NestedSOCollectionWindow newWin = GetWindow<NestedSOCollectionWindow>("Collection Editor");
+                newWin.Init(listWrapperProperty);
+                newWin.Show();
+            }
+        }
+
+        public static void OpenItem(SerializedProperty listWrapperProperty, ScriptableObject item)
         {
             NestedSOCollectionWindow win = GetWindow<NestedSOCollectionWindow>("Collection Editor");
-            win._targetSO = listProperty.serializedObject;
-            win._propertyPath = listProperty.propertyPath;
-            win._breadcrumbs.Clear(); // Start at root
-            win._searchString = "";
+            win.Init(listWrapperProperty);
+            if (item != null) win._breadcrumbs.Add(item);
             win.Show();
         }
 
-        public static void OpenItem(SerializedProperty listProperty, ScriptableObject item)
+        private void Init(SerializedProperty listWrapperProperty)
         {
-            NestedSOCollectionWindow win = GetWindow<NestedSOCollectionWindow>("Collection Editor");
-            win._targetSO = listProperty.serializedObject;
-            win._propertyPath = listProperty.propertyPath;
-            win._breadcrumbs.Clear();
-            if (item != null) win._breadcrumbs.Add(item);
-            win._searchString = "";
-            win.Show();
+            _targetSO = listWrapperProperty.serializedObject;
+            _propertyPath = listWrapperProperty.propertyPath;
+            
+            _breadcrumbs.Clear();
+            _searchString = "";
+            _filteredItems.Clear();
+            _editorCache.Clear();
+            _reorderableList = null;
+            _scrollPosition = Vector2.zero;
         }
 
         private void OnEnable()
@@ -64,26 +81,34 @@ namespace NestedSO.SOEditor
 
         private void OnGUI()
         {
-            // 1. Recover Property (Required because SerializedProperty is not valid across frames)
-            if (_targetSO == null || _targetSO.targetObject == null)
+            bool isValid = false;
+            try
             {
-                EditorGUILayout.HelpBox("Target object is missing.", MessageType.Warning);
+                if (_targetSO != null && _targetSO.targetObject != null) isValid = true;
+            }
+            catch { }
+
+            if (!isValid)
+            {
+                Close();
                 return;
             }
+
             _targetSO.Update();
-            _listProperty = _targetSO.FindProperty(_propertyPath);
-            if (_listProperty == null)
+            _listWrapperProperty = _targetSO.FindProperty(_propertyPath);
+            
+            if (_listWrapperProperty == null)
             {
                 EditorGUILayout.HelpBox($"Could not find property: {_propertyPath}", MessageType.Error);
                 return;
             }
 
-            // 2. Toolbar
+            _itemsListProperty = _listWrapperProperty.FindPropertyRelative("Items");
+
             DrawToolbar();
-            
-            // 3. Main Content
+
             _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
-            
+
             if (!string.IsNullOrEmpty(_searchString))
             {
                 DrawSearchResults();
@@ -96,18 +121,15 @@ namespace NestedSO.SOEditor
             {
                 DrawRootList();
             }
-            
+
             EditorGUILayout.EndScrollView();
-            
-            // Apply changes back to the original object
             _targetSO.ApplyModifiedProperties();
         }
 
         private void DrawToolbar()
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-            
-            // Breadcrumbs
+
             if (GUILayout.Button("Root", EditorStyles.toolbarButton, GUILayout.Width(50)))
             {
                 _breadcrumbs.Clear();
@@ -122,7 +144,6 @@ namespace NestedSO.SOEditor
                 {
                     if (GUILayout.Button(item.name, EditorStyles.toolbarButton, GUILayout.MaxWidth(150)))
                     {
-                        // Navigate back to this item (remove items after it)
                         int index = _breadcrumbs.IndexOf(item);
                         _breadcrumbs.RemoveRange(index + 1, _breadcrumbs.Count - (index + 1));
                     }
@@ -131,7 +152,6 @@ namespace NestedSO.SOEditor
 
             GUILayout.FlexibleSpace();
 
-            // Search
             string newSearch = _searchField.OnToolbarGUI(_searchString, GUILayout.Width(250));
             if (newSearch != _searchString)
             {
@@ -144,74 +164,153 @@ namespace NestedSO.SOEditor
 
         private void DrawRootList()
         {
-            EditorGUILayout.LabelField($"Collection: {_listProperty.displayName}", EditorStyles.boldLabel);
-            EditorGUILayout.Space();
-
-            // Just list the items with Open buttons. Creation/Reordering is done in the Inspector.
-            if (_listProperty.arraySize == 0)
+            if (_reorderableList != null && _reorderableList.serializedProperty.propertyPath != _itemsListProperty.propertyPath)
             {
-                EditorGUILayout.HelpBox("Collection is empty. Add items in the Inspector.", MessageType.Info);
-                return;
+                _reorderableList = null;
             }
 
-            for (int i = 0; i < _listProperty.arraySize; i++)
+            if (_reorderableList == null) InitReorderableList();
+            
+            _reorderableList.DoLayoutList();
+        }
+
+        private void InitReorderableList()
+        {
+            _reorderableList = new ReorderableList(_targetSO, _itemsListProperty, true, true, true, true);
+
+            _reorderableList.drawHeaderCallback = (Rect r) => EditorGUI.LabelField(r, _listWrapperProperty.displayName);
+
+            _reorderableList.drawElementCallback = (Rect rect, int index, bool isActive, bool isFocused) =>
             {
-                SerializedProperty el = _listProperty.GetArrayElementAtIndex(i);
-                ScriptableObject item = el.objectReferenceValue as ScriptableObject;
+                if (index >= _itemsListProperty.arraySize) return;
 
-                if (item == null) continue;
+                SerializedProperty element = _itemsListProperty.GetArrayElementAtIndex(index);
+                ScriptableObject item = element.objectReferenceValue as ScriptableObject;
 
-                EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
-                EditorGUILayout.LabelField(item.name, EditorStyles.boldLabel);
-                if (GUILayout.Button("Edit", GUILayout.Width(60)))
+                if (item == null)
+                {
+                    EditorGUI.LabelField(rect, "Null / Empty");
+                    return;
+                }
+
+                float btnWidth = 50;
+                float nameWidth = rect.width - btnWidth - 5;
+
+                string newName = EditorGUI.TextField(new Rect(rect.x, rect.y + 1, nameWidth, EditorGUIUtility.singleLineHeight), item.name);
+                if (newName != item.name) { item.name = newName; EditorUtility.SetDirty(item); }
+
+                if (GUI.Button(new Rect(rect.x + rect.width - btnWidth, rect.y, btnWidth, EditorGUIUtility.singleLineHeight), "Edit"))
                 {
                     _breadcrumbs.Add(item);
                     GUI.FocusControl(null);
                 }
-                EditorGUILayout.EndHorizontal();
+            };
+
+            _reorderableList.onAddDropdownCallback = (Rect r, ReorderableList l) => ShowAddMenu(_itemsListProperty);
+            _reorderableList.onRemoveCallback = (ReorderableList l) => RemoveItem(_itemsListProperty, l.index);
+        }
+        
+        private void ShowAddMenu(SerializedProperty listProp)
+        {
+            Type listType = null;
+            Type wrapperType = GetTargetTypeFromPath(_targetSO.targetObject.GetType(), _propertyPath);
+            
+            if (wrapperType != null)
+            {
+                 var itemsField = wrapperType.GetField("Items", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                 if (itemsField != null && itemsField.FieldType.IsGenericType)
+                 {
+                     listType = itemsField.FieldType.GetGenericArguments()[0];
+                 }
             }
+
+            if (listType == null) return;
+
+            GenericMenu menu = new GenericMenu();
+            var types = TypeCache.GetTypesDerivedFrom(listType).Where(t => !t.IsAbstract && !t.IsInterface).ToList();
+            if (!listType.IsAbstract && !listType.IsInterface && typeof(ScriptableObject).IsAssignableFrom(listType))
+                 if (!types.Contains(listType)) types.Insert(0, listType);
+
+            foreach (var t in types) menu.AddItem(new GUIContent(t.Name), false, () => CreateAndAddAsset(listProp, t));
+            menu.ShowAsContext();
+        }
+
+        private Type GetTargetTypeFromPath(Type hostType, string path)
+        {
+            Type currentType = hostType;
+            string[] parts = path.Split('.');
+
+            foreach (var part in parts)
+            {
+                if (currentType == null) return null;
+                if (part == "Array") return null; 
+
+                FieldInfo field = null;
+                Type searchType = currentType;
+                while (searchType != null)
+                {
+                    field = searchType.GetField(part, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                    if (field != null) break;
+                    searchType = searchType.BaseType;
+                }
+
+                if (field == null) return null;
+                currentType = field.FieldType;
+            }
+            return currentType;
+        }
+
+        private void CreateAndAddAsset(SerializedProperty listProp, Type type)
+        {
+            ScriptableObject newAsset = ScriptableObject.CreateInstance(type);
+            newAsset.name = "New " + type.Name;
+            AssetDatabase.AddObjectToAsset(newAsset, listProp.serializedObject.targetObject);
+            AssetDatabase.SaveAssets();
+
+            listProp.arraySize++;
+            SerializedProperty element = listProp.GetArrayElementAtIndex(listProp.arraySize - 1);
+            element.objectReferenceValue = newAsset;
+            listProp.serializedObject.ApplyModifiedProperties();
+        }
+
+        private void RemoveItem(SerializedProperty listProp, int index)
+        {
+            SerializedProperty element = listProp.GetArrayElementAtIndex(index);
+            ScriptableObject asset = element.objectReferenceValue as ScriptableObject;
+            
+            if (asset != null)
+            {
+                NestedSOAssetUtils.DestroyAsset(asset);
+            }
+            
+            element.objectReferenceValue = null;
+            listProp.DeleteArrayElementAtIndex(index);
+            listProp.serializedObject.ApplyModifiedProperties();
+            AssetDatabase.SaveAssets();
         }
 
         private void DrawDeepDive()
         {
             UnityEngine.Object item = _breadcrumbs.LastOrDefault();
-            if (item == null)
-            {
-                _breadcrumbs.RemoveAt(_breadcrumbs.Count - 1);
-                return;
-            }
+            if (item == null) { _breadcrumbs.RemoveAt(_breadcrumbs.Count - 1); return; }
 
             if (!_editorCache.TryGetValue(item, out Editor editor))
-            {
                 _editorCache[item] = editor = Editor.CreateEditor(item);
-            }
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.Space();
             EditorGUILayout.LabelField($"Editing: {item.name}", EditorStyles.boldLabel);
             EditorGUILayout.Space();
-
-            // Name Field
+            
             EditorGUI.BeginChangeCheck();
             string newName = EditorGUILayout.TextField("Name", item.name);
-            if (EditorGUI.EndChangeCheck())
-            {
-                item.name = newName;
-                EditorUtility.SetDirty(item);
-            }
-
+            if (EditorGUI.EndChangeCheck()) { item.name = newName; EditorUtility.SetDirty(item); }
             EditorGUILayout.Space();
-            
-            // Draw Inner Inspector
+
             if (editor != null)
             {
-                try
-                {
-                    editor.OnInspectorGUI();
-                }
-                catch { } // Catch layout errors from inner editors
+                try { editor.OnInspectorGUI(); } catch { }
             }
-            
             EditorGUILayout.EndVertical();
         }
 
@@ -220,8 +319,6 @@ namespace NestedSO.SOEditor
             if (_filteredItems.Count > 0)
             {
                 DrawMassEdit();
-                EditorGUILayout.Space();
-                
                 foreach (var match in _filteredItems)
                 {
                     EditorGUILayout.BeginVertical(EditorStyles.helpBox);
@@ -235,15 +332,11 @@ namespace NestedSO.SOEditor
                         GUI.FocusControl(null);
                     }
                     EditorGUILayout.EndHorizontal();
-
                     if (match.MatchDetails.Count > 0)
                     {
                         EditorGUI.indentLevel++;
-                        GUIStyle richStyle = new GUIStyle(EditorStyles.miniLabel) { richText = true };
-                        foreach (var detail in match.MatchDetails)
-                        {
-                            EditorGUILayout.LabelField(detail, richStyle);
-                        }
+                        GUIStyle s = new GUIStyle(EditorStyles.miniLabel) { richText = true };
+                        foreach (var d in match.MatchDetails) EditorGUILayout.LabelField(d, s);
                         EditorGUI.indentLevel--;
                     }
                     EditorGUILayout.EndVertical();
@@ -258,29 +351,19 @@ namespace NestedSO.SOEditor
         private void DrawMassEdit()
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            _massEditExpanded = EditorGUILayout.Foldout(_massEditExpanded, $"Mass Edit ({_filteredItems.Count} items)", true);
-            
+            _massEditExpanded = EditorGUILayout.Foldout(_massEditExpanded, $"Mass Edit ({_filteredItems.Count})", true);
             if (_massEditExpanded)
             {
                 EditorGUILayout.BeginHorizontal();
-                
-                // 1. Property Selection
                 SerializedObject rep = new SerializedObject(_filteredItems[0].Item);
                 List<string> props = new List<string>();
                 SerializedProperty iter = rep.GetIterator();
-                if (iter.NextVisible(true))
-                {
-                    while (iter.NextVisible(false))
-                    {
-                        if (iter.name != "m_Script") props.Add(iter.name);
-                    }
-                }
+                if (iter.NextVisible(true)) { while(iter.NextVisible(false)) if(iter.name != "m_Script") props.Add(iter.name); }
 
                 int idx = props.IndexOf(_massEditPropertyPath);
                 int newIdx = EditorGUILayout.Popup(idx, props.ToArray());
                 if (newIdx != idx && newIdx >= 0) _massEditPropertyPath = props[newIdx];
 
-                // 2. Value Editing
                 if (!string.IsNullOrEmpty(_massEditPropertyPath))
                 {
                     SerializedProperty p = rep.FindProperty(_massEditPropertyPath);
@@ -289,11 +372,7 @@ namespace NestedSO.SOEditor
                         EditorGUI.BeginChangeCheck();
                         EditorGUILayout.PropertyField(p, GUIContent.none, true);
                         if (EditorGUI.EndChangeCheck()) rep.ApplyModifiedProperties();
-                        
-                        if (GUILayout.Button("Apply All", GUILayout.Width(80)))
-                        {
-                            ApplyMassEdit(p);
-                        }
+                        if (GUILayout.Button("Apply", GUILayout.Width(60))) ApplyMassEdit(p);
                     }
                 }
                 EditorGUILayout.EndHorizontal();
@@ -305,48 +384,35 @@ namespace NestedSO.SOEditor
         {
             _filteredItems.Clear();
             string lower = _searchString.ToLowerInvariant();
-
-            // Iterate through the list property
-            for (int i = 0; i < _listProperty.arraySize; i++)
+            for (int i = 0; i < _itemsListProperty.arraySize; i++)
             {
-                ScriptableObject item = _listProperty.GetArrayElementAtIndex(i).objectReferenceValue as ScriptableObject;
+                ScriptableObject item = _itemsListProperty.GetArrayElementAtIndex(i).objectReferenceValue as ScriptableObject;
                 if (item == null) continue;
-
                 List<string> matches = new List<string>();
                 bool nameMatch = item.name.ToLowerInvariant().Contains(lower);
-                if (item.GetType().Name.ToLowerInvariant().Contains(lower)) 
-                    matches.Add($"Type: <color=#FFFF00>{item.GetType().Name}</color>");
+                if (item.GetType().Name.ToLowerInvariant().Contains(lower)) matches.Add($"Type: <color=#FFFF00>{item.GetType().Name}</color>");
 
                 SerializedObject so = new SerializedObject(item);
-                SerializedProperty iterator = so.GetIterator();
-                if (iterator.NextVisible(true))
+                SerializedProperty it = so.GetIterator();
+                if (it.NextVisible(true))
                 {
-                    while (iterator.NextVisible(false))
+                    while (it.NextVisible(false))
                     {
-                        if (iterator.name == "m_Script") continue;
-                        string val = "";
-                        // Simple value checks
-                        switch (iterator.propertyType)
+                        if (it.name == "m_Script") continue;
+                        string v = "";
+                        switch (it.propertyType)
                         {
-                            case SerializedPropertyType.String: val = iterator.stringValue; break;
-                            case SerializedPropertyType.Integer: val = iterator.intValue.ToString(); break;
-                            case SerializedPropertyType.Float: val = iterator.floatValue.ToString(); break;
-                            case SerializedPropertyType.Boolean: val = iterator.boolValue.ToString(); break;
+                            case SerializedPropertyType.String: v = it.stringValue; break;
+                            case SerializedPropertyType.Integer: v = it.intValue.ToString(); break;
+                            case SerializedPropertyType.Float: v = it.floatValue.ToString(); break;
+                            case SerializedPropertyType.Boolean: v = it.boolValue.ToString(); break;
                         }
-                        if (!string.IsNullOrEmpty(val) && val.ToLowerInvariant().Contains(lower))
-                        {
-                            matches.Add($"{iterator.displayName}: <color=#FFFF00>{val}</color>");
-                        }
+                        if (!string.IsNullOrEmpty(v) && v.ToLowerInvariant().Contains(lower)) matches.Add($"{it.displayName}: <color=#FFFF00>{v}</color>");
                     }
                 }
-
-                if (nameMatch || matches.Count > 0)
-                {
-                    _filteredItems.Add(new SearchMatch { Item = item, MatchDetails = matches });
-                }
+                if (nameMatch || matches.Count > 0) _filteredItems.Add(new SearchMatch { Item = item, MatchDetails = matches });
             }
             
-            // Auto select mass edit property
             if (_filteredItems.Count > 0 && !string.IsNullOrEmpty(_searchString))
             {
                 SerializedObject r = new SerializedObject(_filteredItems[0].Item);
@@ -357,9 +423,9 @@ namespace NestedSO.SOEditor
 
         private void ApplyMassEdit(SerializedProperty src)
         {
-            foreach (var match in _filteredItems)
+            foreach (var m in _filteredItems)
             {
-                SerializedObject so = new SerializedObject(match.Item);
+                SerializedObject so = new SerializedObject(m.Item);
                 SerializedProperty p = so.FindProperty(src.name);
                 if (p != null && p.propertyType == src.propertyType)
                 {
