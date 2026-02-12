@@ -33,21 +33,21 @@ namespace NestedSO.SOEditor
 
 		// Navigation & State
 		private List<UnityEngine.Object> _breadcrumbs = new List<UnityEngine.Object>();
-		
+
 		private ReorderableList _orderableList;
 		private SerializedProperty _nestedSOsProperty;
 		private GenericMenu _menu = null;
 		private Type _baseType;
 		private string _baseTypeName;
-		
+
 		// Editor Cache
 		private Dictionary<UnityEngine.Object, Editor> _cachedEditors = new Dictionary<UnityEngine.Object, Editor>();
 
 		// Search & Filter
 		private SearchField _searchField;
 		private string _searchString = "";
-		private List<SearchMatch> _filteredItems = new List<SearchMatch>(); // Changed to store Match Details
-		
+		private List<SearchMatch> _filteredItems = new List<SearchMatch>();
+
 		// Mass Edit
 		private string _massEditSelectedPropertyPath;
 		private bool _massEditExpanded = true;
@@ -67,14 +67,14 @@ namespace NestedSO.SOEditor
 			_searchField.downOrUpArrowKeyPressed += OnSearchFocus;
 
 			Type baseType = GetBaseTypeFromCollection(targetCollection);
-			if(baseType == null) return;
+			if (baseType == null) return;
 
 			_baseType = baseType;
 			_baseTypeName = _baseType.Name;
 			_menu = GenericMenuEditorUtils.CreateSOWindow(_baseType, OnItemToCreateSelected);
-			
+
 			_nestedSOsProperty = serializedObject.FindProperty(NestedSOItemsFieldName);
-			
+
 			_orderableList = new ReorderableList(serializedObject, _nestedSOsProperty, true, true, false, false);
 			_orderableList.drawElementCallback = OnDrawListElement;
 			_orderableList.drawHeaderCallback = OnDrawListHeader;
@@ -97,7 +97,7 @@ namespace NestedSO.SOEditor
 
 		public override void OnInspectorGUI()
 		{
-			if(_baseType == null)
+			if (_baseType == null)
 			{
 				GUILayout.Label("Unable to Load BaseType");
 				return;
@@ -152,11 +152,11 @@ namespace NestedSO.SOEditor
 			{
 				UnityEngine.Object currentItem = (_breadcrumbs.Count > 0) ? _breadcrumbs[_breadcrumbs.Count - 1] : serializedObject.targetObject;
 				bool isRoot = currentItem == serializedObject.targetObject;
-				
+
 				string title = isRoot ? $"{_baseTypeName} Collection" : currentItem.name;
 
 				EditorGUILayout.LabelField(title, EditorStyles.boldLabel, GUILayout.Width(EditorGUIUtility.labelWidth));
-				
+
 				GUILayout.FlexibleSpace();
 
 				Rect searchRect = GUILayoutUtility.GetRect(100, 300, 20, 20, GUILayout.MinWidth(100));
@@ -185,7 +185,7 @@ namespace NestedSO.SOEditor
 			if (_breadcrumbs == null || _breadcrumbs.Count == 0) return;
 
 			GUILayout.BeginHorizontal(EditorStyles.toolbar);
-			
+
 			GUIStyle breadcrumbStyle = new GUIStyle(EditorStyles.toolbarButton);
 			breadcrumbStyle.alignment = TextAnchor.MiddleLeft;
 			breadcrumbStyle.richText = true;
@@ -240,7 +240,7 @@ namespace NestedSO.SOEditor
 				}
 
 				GUILayout.Space(10);
-				
+
 				if (editor != null)
 				{
 					editor.OnInspectorGUI();
@@ -255,15 +255,15 @@ namespace NestedSO.SOEditor
 
 			EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 			_massEditExpanded = EditorGUILayout.Foldout(_massEditExpanded, $"Mass Edit ({_filteredItems.Count} items)", true);
-			
+
 			if (_massEditExpanded)
 			{
 				EditorGUILayout.BeginHorizontal();
-				
+
 				SerializedObject representative = new SerializedObject(_filteredItems[0].Item);
 				List<string> props = new List<string>();
 				SerializedProperty iter = representative.GetIterator();
-				
+
 				if (iter.NextVisible(true))
 				{
 					while (iter.NextVisible(false))
@@ -275,7 +275,7 @@ namespace NestedSO.SOEditor
 
 				int selectedIndex = props.IndexOf(_massEditSelectedPropertyPath);
 				int newIndex = EditorGUILayout.Popup("Property", selectedIndex, props.ToArray());
-				
+
 				if (newIndex != selectedIndex && newIndex >= 0 && newIndex < props.Count)
 				{
 					_massEditSelectedPropertyPath = props[newIndex];
@@ -289,21 +289,21 @@ namespace NestedSO.SOEditor
 					if (targetProp != null)
 					{
 						EditorGUILayout.BeginHorizontal();
-						
+
 						EditorGUI.BeginChangeCheck();
 						EditorGUILayout.PropertyField(targetProp, new GUIContent("New Value"), true);
 						bool valueChanged = EditorGUI.EndChangeCheck();
 
 						if (valueChanged)
 						{
-							representative.ApplyModifiedProperties(); 
+							representative.ApplyModifiedProperties();
 						}
-						
+
 						if (GUILayout.Button("Apply to All", GUILayout.Width(100)))
 						{
 							ApplyMassEdit(representative, targetProp);
 						}
-						
+
 						EditorGUILayout.EndHorizontal();
 					}
 				}
@@ -367,8 +367,8 @@ namespace NestedSO.SOEditor
 		{
 			SerializedProperty serializedNestedItem = _orderableList.serializedProperty.GetArrayElementAtIndex(index);
 			ScriptableObject nestedItem = serializedNestedItem.objectReferenceValue as ScriptableObject;
-			
-			if (nestedItem == null) 
+
+			if (nestedItem == null)
 			{
 				EditorGUI.LabelField(rect, "Null Item");
 				return;
@@ -408,9 +408,8 @@ namespace NestedSO.SOEditor
 		private void OpenItem(ScriptableObject item)
 		{
 			_searchString = "";
-			GUI.FocusControl(null); 
+			GUI.FocusControl(null);
 
-			// Ensure flat navigation (Root -> Item)
 			if (_breadcrumbs.Count == 1)
 			{
 				_breadcrumbs.Add(item);
@@ -422,7 +421,7 @@ namespace NestedSO.SOEditor
 				_breadcrumbs.Add(root);
 				_breadcrumbs.Add(item);
 			}
-			
+
 			SaveNavigationState();
 		}
 
@@ -436,7 +435,7 @@ namespace NestedSO.SOEditor
 					_breadcrumbs.RemoveRange(index + 1, countToRemove);
 				}
 				SaveNavigationState();
-				
+
 				_searchString = "";
 				GUI.FocusControl(null);
 			}
@@ -459,11 +458,22 @@ namespace NestedSO.SOEditor
 				if (item == null) continue;
 
 				List<string> matchDetails = new List<string>();
+
+				// Check Name
 				bool nameMatch = item.name.ToLowerInvariant().Contains(lowerSearch);
-				
+
+				// Check Type
+				string typeName = item.GetType().Name;
+				bool typeMatch = typeName.ToLowerInvariant().Contains(lowerSearch);
+				if (typeMatch)
+				{
+					matchDetails.Add($"Type: <color=#FFFF00>{typeName}</color>");
+				}
+
+				// Check Properties
 				SerializedObject so = new SerializedObject(item);
 				SerializedProperty iter = so.GetIterator();
-				
+
 				if (iter.NextVisible(true))
 				{
 					while (iter.NextVisible(false))
@@ -474,26 +484,26 @@ namespace NestedSO.SOEditor
 						string valStr = "";
 						string displayValue = "";
 
-						switch(iter.propertyType)
+						switch (iter.propertyType)
 						{
-							case SerializedPropertyType.String: 
-								valStr = iter.stringValue; 
+							case SerializedPropertyType.String:
+								valStr = iter.stringValue;
 								displayValue = valStr;
 								break;
-							case SerializedPropertyType.Integer: 
-								valStr = iter.intValue.ToString(); 
+							case SerializedPropertyType.Integer:
+								valStr = iter.intValue.ToString();
 								displayValue = valStr;
 								break;
-							case SerializedPropertyType.Float: 
-								valStr = iter.floatValue.ToString(); 
+							case SerializedPropertyType.Float:
+								valStr = iter.floatValue.ToString();
 								displayValue = valStr;
 								break;
-							case SerializedPropertyType.Boolean: 
-								valStr = iter.boolValue.ToString(); 
+							case SerializedPropertyType.Boolean:
+								valStr = iter.boolValue.ToString();
 								displayValue = valStr;
 								break;
-							case SerializedPropertyType.Enum: 
-								if(iter.enumValueIndex >= 0 && iter.enumValueIndex < iter.enumNames.Length)
+							case SerializedPropertyType.Enum:
+								if (iter.enumValueIndex >= 0 && iter.enumValueIndex < iter.enumNames.Length)
 								{
 									valStr = iter.enumNames[iter.enumValueIndex];
 									displayValue = valStr;
@@ -501,51 +511,49 @@ namespace NestedSO.SOEditor
 								break;
 						}
 
-						// Check if value matches
+						// Value Match
 						if (!string.IsNullOrEmpty(valStr) && valStr.ToLowerInvariant().Contains(lowerSearch))
 						{
 							valMatch = true;
 						}
 
-						// Check if Property Name matches
+						// Property Name Match
 						bool propNameMatch = iter.displayName.ToLowerInvariant().Contains(lowerSearch);
 
 						if (valMatch || propNameMatch)
 						{
-							string formattedDetail = "";
+							string formattedDetail;
 							string propLabel = iter.displayName;
 
 							if (valMatch)
 							{
-								// Highlight value
 								formattedDetail = $"{propLabel}: <color=#FFFF00>{displayValue}</color>";
 							}
 							else
 							{
-								// Matched property name only
 								formattedDetail = $"<color=#FFFF00>{propLabel}</color>: {displayValue}";
 							}
-							
+
 							matchDetails.Add(formattedDetail);
 						}
 					}
 				}
 
-				if (nameMatch || matchDetails.Count > 0)
+				if (nameMatch || typeMatch || matchDetails.Count > 0)
 				{
-					_filteredItems.Add(new SearchMatch 
-					{ 
-						Item = item, 
-						MatchDetails = matchDetails 
+					_filteredItems.Add(new SearchMatch
+					{
+						Item = item,
+						MatchDetails = matchDetails
 					});
 				}
 			}
 
-			// Auto-select Mass Edit
+			// Auto-select Mass Edit Property if search matches a property name exactly
 			if (!string.IsNullOrEmpty(_searchString) && _filteredItems.Count > 0)
 			{
 				SerializedObject firstSO = new SerializedObject(_filteredItems[0].Item);
-				SerializedProperty prop = firstSO.FindProperty(_searchString); 
+				SerializedProperty prop = firstSO.FindProperty(_searchString);
 				if (prop != null)
 				{
 					_massEditSelectedPropertyPath = prop.name;
@@ -559,7 +567,7 @@ namespace NestedSO.SOEditor
 			{
 				SerializedObject so = new SerializedObject(match.Item);
 				SerializedProperty prop = so.FindProperty(sourceProp.name);
-				
+
 				if (prop != null && prop.propertyType == sourceProp.propertyType)
 				{
 					switch (sourceProp.propertyType)
@@ -593,7 +601,7 @@ namespace NestedSO.SOEditor
 
 		public static void RemoveAssetFromCollection(NestedSOCollectionBase collection, ScriptableObject asset)
 		{
-			if(!collection._HasAsset(asset)) throw new Exception($"Collection {collection} does not contains asset {asset}");
+			if (!collection._HasAsset(asset)) throw new Exception($"Collection {collection} does not contains asset {asset}");
 			RemoveAssetRecursive(collection, asset);
 			AssetDatabase.SaveAssets();
 			EditorUtility.SetDirty(collection);
@@ -607,13 +615,13 @@ namespace NestedSO.SOEditor
 		public static ScriptableObject AddAssetToCollection(NestedSOCollectionBase collection, Type type)
 		{
 			Type baseType = GetBaseTypeFromCollection(collection);
-			if(baseType == null) throw new Exception($"No BaseType could be found for {collection}");
-			if(!baseType.IsAssignableFrom(type)) throw new Exception($"The collection requires BaseType {baseType}, which {type} does not derive from");
-			
+			if (baseType == null) throw new Exception($"No BaseType could be found for {collection}");
+			if (!baseType.IsAssignableFrom(type)) throw new Exception($"The collection requires BaseType {baseType}, which {type} does not derive from");
+
 			ScriptableObject nestedSOItemInstance = CreateInstance(type);
 			nestedSOItemInstance.name = "New " + type.Name;
 			collection._AddAsset(nestedSOItemInstance);
-			
+
 			AssetDatabase.AddObjectToAsset(nestedSOItemInstance, collection);
 			AssetDatabase.SaveAssets();
 
@@ -626,19 +634,19 @@ namespace NestedSO.SOEditor
 
 		public static Type GetBaseTypeFromCollection(NestedSOCollectionBase collection)
 		{
-			if(collection == null) return null;
+			if (collection == null) return null;
 			Type baseType;
 			try { baseType = collection.GetType(); } catch { baseType = null; }
 			Type[] types = null;
-			while(baseType != null && (types == null || types.Length == 0))
+			while (baseType != null && (types == null || types.Length == 0))
 			{
 				baseType = baseType.BaseType;
-				if(baseType != null && baseType.IsGenericType && baseType.GetGenericTypeDefinition() == typeof(NestedSOCollectionBase<>))
+				if (baseType != null && baseType.IsGenericType && baseType.GetGenericTypeDefinition() == typeof(NestedSOCollectionBase<>))
 				{
 					types = baseType.GetGenericArguments();
 				}
 			}
-			if(types == null || types.Length == 0) return null;
+			if (types == null || types.Length == 0) return null;
 			return types[0];
 		}
 
@@ -648,10 +656,10 @@ namespace NestedSO.SOEditor
 
 		private static void RemoveAssetRecursive(NestedSOCollectionBase collection, ScriptableObject nestedItem)
 		{
-			if(nestedItem is NestedSOCollectionBase internalCollection)
+			if (nestedItem is NestedSOCollectionBase internalCollection)
 			{
 				IReadOnlyList<ScriptableObject> internalCollectionItems = internalCollection.GetRawItems();
-				for(int i = internalCollectionItems.Count - 1; i >= 0; i--)
+				for (int i = internalCollectionItems.Count - 1; i >= 0; i--)
 				{
 					RemoveAssetRecursive(internalCollection, internalCollectionItems[i]);
 				}

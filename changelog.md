@@ -2,7 +2,10 @@
 
 ## v2.0.0 - 12/02/2026
 * Improved NestedSOCollectionEditor 
-  * Added Search / Filter functionality + Highlighting
+  * Added Search / Filtering of Items + Highlighting for
+	* Name
+	* Type
+	* Property
   * Improved performance using Breadcrumbs Navigation
   * Added Mass Property Editing Feature
 
