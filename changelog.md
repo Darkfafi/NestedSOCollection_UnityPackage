@@ -1,5 +1,11 @@
 # Changelog NestedSOCollection
 
+## v2.0.0 - 12/02/2026
+* Improved NestedSOCollectionEditor 
+  * Added Search / Filter functionality + Highlighting
+  * Improved performance using Breadcrumbs Navigation
+  * Added Mass Property Editing Feature
+
 ## v1.4.0 - 30/04/2023
 * Corrected namespace categorizing issue within the GenericMenuEditorUtils
 * Removed INestedSOCollection interface.
