@@ -19,9 +19,19 @@ namespace NestedSO.SOEditor
 
 		#endregion
 
+		#region Inner Classes
+
+		private class SearchMatch
+		{
+			public ScriptableObject Item;
+			public List<string> MatchDetails = new List<string>();
+		}
+
+		#endregion
+
 		#region Variables
 
-		// Navigation & State (Non-static to prevent shared state between editors)
+		// Navigation & State
 		private List<UnityEngine.Object> _breadcrumbs = new List<UnityEngine.Object>();
 		
 		private ReorderableList _orderableList;
@@ -36,7 +46,7 @@ namespace NestedSO.SOEditor
 		// Search & Filter
 		private SearchField _searchField;
 		private string _searchString = "";
-		private List<ScriptableObject> _filteredItems = new List<ScriptableObject>();
+		private List<SearchMatch> _filteredItems = new List<SearchMatch>(); // Changed to store Match Details
 		
 		// Mass Edit
 		private string _massEditSelectedPropertyPath;
@@ -51,7 +61,6 @@ namespace NestedSO.SOEditor
 			NestedSOCollectionBase targetCollection = serializedObject.targetObject as NestedSOCollectionBase;
 			if (targetCollection == null) return;
 
-			// 1. Load persisted state specifically for THIS object instance
 			LoadNavigationState(targetCollection);
 
 			_searchField = new SearchField();
@@ -66,18 +75,15 @@ namespace NestedSO.SOEditor
 			
 			_nestedSOsProperty = serializedObject.FindProperty(NestedSOItemsFieldName);
 			
-			// Initialize List (Only used for Root view)
 			_orderableList = new ReorderableList(serializedObject, _nestedSOsProperty, true, true, false, false);
 			_orderableList.drawElementCallback = OnDrawListElement;
 			_orderableList.drawHeaderCallback = OnDrawListHeader;
 
-			// 2. Enforce Root Integrity
 			EnsureRootIsTarget(targetCollection);
 		}
 
 		private void EnsureRootIsTarget(UnityEngine.Object target)
 		{
-			// The first breadcrumb MUST always be the collection itself
 			if (_breadcrumbs.Count == 0)
 			{
 				_breadcrumbs.Add(target);
@@ -97,12 +103,9 @@ namespace NestedSO.SOEditor
 				return;
 			}
 
-			// 1. Draw Breadcrumbs
 			DrawBreadcrumbs();
-
 			GUILayout.Space(5);
 
-			// 2. Main Content Area
 			EditorGUILayout.BeginVertical("framebox");
 			{
 				DrawHeaderArea();
@@ -110,30 +113,21 @@ namespace NestedSO.SOEditor
 				GUILayout.Space(5);
 				serializedObject.Update();
 
-				// Determine View Mode
 				if (!string.IsNullOrEmpty(_searchString))
 				{
-					// Mode A: Search & Mass Edit (Always search from Root context)
 					DrawMassEditInterface();
 					DrawSearchResults();
 				}
 				else
 				{
-					// Mode B: Navigation
-					// Get current item (Last in breadcrumbs)
 					UnityEngine.Object currentViewItem = (_breadcrumbs.Count > 0) ? _breadcrumbs[_breadcrumbs.Count - 1] : serializedObject.targetObject;
 
 					if (currentViewItem == serializedObject.targetObject)
 					{
-						// Root View: List
-						if (_orderableList != null)
-						{
-							_orderableList.DoLayoutList();
-						}
+						if (_orderableList != null) _orderableList.DoLayoutList();
 					}
 					else
 					{
-						// Nested View: Inspector
 						DrawDeepDiveInspector(currentViewItem);
 					}
 				}
@@ -145,7 +139,6 @@ namespace NestedSO.SOEditor
 
 		protected void OnDisable()
 		{
-			// Save state when deselecting or recompiling
 			SaveNavigationState();
 		}
 
@@ -157,7 +150,6 @@ namespace NestedSO.SOEditor
 		{
 			EditorGUILayout.BeginHorizontal();
 			{
-				// Determine title
 				UnityEngine.Object currentItem = (_breadcrumbs.Count > 0) ? _breadcrumbs[_breadcrumbs.Count - 1] : serializedObject.targetObject;
 				bool isRoot = currentItem == serializedObject.targetObject;
 				
@@ -167,7 +159,6 @@ namespace NestedSO.SOEditor
 				
 				GUILayout.FlexibleSpace();
 
-				// Search Field
 				Rect searchRect = GUILayoutUtility.GetRect(100, 300, 20, 20, GUILayout.MinWidth(100));
 				string newSearch = _searchField.OnGUI(searchRect, _searchString);
 				if (newSearch != _searchString)
@@ -178,7 +169,6 @@ namespace NestedSO.SOEditor
 
 				GUILayout.Space(5);
 
-				// "Create New" Button (Only show at Root and when not searching)
 				if (isRoot && string.IsNullOrEmpty(_searchString))
 				{
 					if (IconButton("CollabCreate Icon", 20))
@@ -208,14 +198,12 @@ namespace NestedSO.SOEditor
 				string name = obj.name;
 				if (name.Length > 20) name = name.Substring(0, 17) + "...";
 
-				// Last item is just a label (current location)
 				if (i == _breadcrumbs.Count - 1)
 				{
 					GUILayout.Label(name, breadcrumbStyle, GUILayout.MaxWidth(150));
 				}
 				else
 				{
-					// Navigate back
 					if (GUILayout.Button(name, breadcrumbStyle, GUILayout.MaxWidth(150)))
 					{
 						NavigateToBreadcrumbIndex(i);
@@ -243,7 +231,6 @@ namespace NestedSO.SOEditor
 
 			EditorGUILayout.BeginVertical(EditorStyles.inspectorDefaultMargins);
 			{
-				// Allow renaming inside the deep dive
 				EditorGUI.BeginChangeCheck();
 				string newName = EditorGUILayout.TextField("Name", item.name);
 				if (EditorGUI.EndChangeCheck())
@@ -254,7 +241,6 @@ namespace NestedSO.SOEditor
 
 				GUILayout.Space(10);
 				
-				// Draw the standard inspector for the item
 				if (editor != null)
 				{
 					editor.OnInspectorGUI();
@@ -274,7 +260,7 @@ namespace NestedSO.SOEditor
 			{
 				EditorGUILayout.BeginHorizontal();
 				
-				SerializedObject representative = new SerializedObject(_filteredItems[0]);
+				SerializedObject representative = new SerializedObject(_filteredItems[0].Item);
 				List<string> props = new List<string>();
 				SerializedProperty iter = representative.GetIterator();
 				
@@ -334,25 +320,44 @@ namespace NestedSO.SOEditor
 				return;
 			}
 
+			GUIStyle highlightStyle = new GUIStyle(EditorStyles.miniLabel);
+			highlightStyle.richText = true;
+			highlightStyle.normal.textColor = new Color(0.8f, 0.8f, 0.8f, 1f);
+
 			for (int i = 0; i < _filteredItems.Count; i++)
 			{
-				ScriptableObject item = _filteredItems[i];
+				SearchMatch match = _filteredItems[i];
+				ScriptableObject item = match.Item;
 				if (item == null) continue;
 
-				EditorGUILayout.BeginHorizontal("helpBox");
+				EditorGUILayout.BeginVertical("helpBox");
 				{
-					GUILayout.Label(item.name, EditorStyles.boldLabel, GUILayout.ExpandWidth(true));
-					
-					if (GUILayout.Button("Open", GUILayout.Width(60)))
+					// Top Row: Name + Open Button
+					EditorGUILayout.BeginHorizontal();
 					{
-						OpenItem(item);
+						GUILayout.Label(item.name, EditorStyles.boldLabel, GUILayout.ExpandWidth(true));
+						if (GUILayout.Button("Open", GUILayout.Width(60)))
+						{
+							OpenItem(item);
+						}
+					}
+					EditorGUILayout.EndHorizontal();
+
+					// Bottom Row: Highlighted Matches
+					if (match.MatchDetails.Count > 0)
+					{
+						EditorGUI.indentLevel++;
+						foreach (string detail in match.MatchDetails)
+						{
+							GUILayout.Label(detail, highlightStyle);
+						}
+						EditorGUI.indentLevel--;
 					}
 				}
-				EditorGUILayout.EndHorizontal();
+				EditorGUILayout.EndVertical();
 			}
 		}
 
-		// ReorderableList Callbacks
 		private void OnDrawListHeader(Rect rect)
 		{
 			EditorGUI.LabelField(rect, "Items");
@@ -369,7 +374,6 @@ namespace NestedSO.SOEditor
 				return;
 			}
 
-			// Name Field
 			string objectName = nestedItem.name;
 			float btnWidth = 24;
 			float padding = 2;
@@ -383,7 +387,6 @@ namespace NestedSO.SOEditor
 				EditorUtility.SetDirty(nestedItem);
 			}
 
-			// Buttons
 			Rect openBtnRect = new Rect(rect.x + rect.width - (btnWidth * 2) - padding, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
 			Rect deleteBtnRect = new Rect(rect.x + rect.width - btnWidth, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
 
@@ -404,26 +407,16 @@ namespace NestedSO.SOEditor
 
 		private void OpenItem(ScriptableObject item)
 		{
-			// Reset Search
 			_searchString = "";
 			GUI.FocusControl(null); 
 
-			// Prevent duplicates or "Digging" through siblings.
-			// Logic: If we open an item, we generally want to see [Root -> Item].
-			
-			// If we are already at Root, we just Add.
+			// Ensure flat navigation (Root -> Item)
 			if (_breadcrumbs.Count == 1)
 			{
 				_breadcrumbs.Add(item);
 			}
 			else
 			{
-				// If we are deep in the tree (e.g. [Root -> ItemA]) and we somehow open ItemB (via search?),
-				// we should probably replace ItemA with ItemB to keep the "Surface Level" feeling.
-				// However, if we support true nesting, we might want to stack.
-				// Given your request "Root -> Item Pressed", we reset to that state.
-				
-				// Keep Root
 				UnityEngine.Object root = _breadcrumbs[0];
 				_breadcrumbs.Clear();
 				_breadcrumbs.Add(root);
@@ -449,9 +442,7 @@ namespace NestedSO.SOEditor
 			}
 		}
 
-		private void OnSearchFocus() 
-		{ 
-		}
+		private void OnSearchFocus() { }
 
 		private void PerformSearch()
 		{
@@ -467,54 +458,93 @@ namespace NestedSO.SOEditor
 
 				if (item == null) continue;
 
-				bool match = false;
-
-				if (item.name.ToLowerInvariant().Contains(lowerSearch)) match = true;
-				else
+				List<string> matchDetails = new List<string>();
+				bool nameMatch = item.name.ToLowerInvariant().Contains(lowerSearch);
+				
+				SerializedObject so = new SerializedObject(item);
+				SerializedProperty iter = so.GetIterator();
+				
+				if (iter.NextVisible(true))
 				{
-					SerializedObject so = new SerializedObject(item);
-					SerializedProperty iter = so.GetIterator();
-					if (iter.NextVisible(true))
+					while (iter.NextVisible(false))
 					{
-						while (iter.NextVisible(false))
+						if (iter.name == "m_Script") continue;
+
+						bool valMatch = false;
+						string valStr = "";
+						string displayValue = "";
+
+						switch(iter.propertyType)
 						{
-							if (iter.name.ToLowerInvariant().Contains(lowerSearch))
-							{
-								match = true;
+							case SerializedPropertyType.String: 
+								valStr = iter.stringValue; 
+								displayValue = valStr;
 								break;
+							case SerializedPropertyType.Integer: 
+								valStr = iter.intValue.ToString(); 
+								displayValue = valStr;
+								break;
+							case SerializedPropertyType.Float: 
+								valStr = iter.floatValue.ToString(); 
+								displayValue = valStr;
+								break;
+							case SerializedPropertyType.Boolean: 
+								valStr = iter.boolValue.ToString(); 
+								displayValue = valStr;
+								break;
+							case SerializedPropertyType.Enum: 
+								if(iter.enumValueIndex >= 0 && iter.enumValueIndex < iter.enumNames.Length)
+								{
+									valStr = iter.enumNames[iter.enumValueIndex];
+									displayValue = valStr;
+								}
+								break;
+						}
+
+						// Check if value matches
+						if (!string.IsNullOrEmpty(valStr) && valStr.ToLowerInvariant().Contains(lowerSearch))
+						{
+							valMatch = true;
+						}
+
+						// Check if Property Name matches
+						bool propNameMatch = iter.displayName.ToLowerInvariant().Contains(lowerSearch);
+
+						if (valMatch || propNameMatch)
+						{
+							string formattedDetail = "";
+							string propLabel = iter.displayName;
+
+							if (valMatch)
+							{
+								// Highlight value
+								formattedDetail = $"{propLabel}: <color=#FFFF00>{displayValue}</color>";
+							}
+							else
+							{
+								// Matched property name only
+								formattedDetail = $"<color=#FFFF00>{propLabel}</color>: {displayValue}";
 							}
 							
-							string valStr = "";
-							switch(iter.propertyType)
-							{
-								case SerializedPropertyType.String: valStr = iter.stringValue; break;
-								case SerializedPropertyType.Integer: valStr = iter.intValue.ToString(); break;
-								case SerializedPropertyType.Float: valStr = iter.floatValue.ToString(); break;
-								case SerializedPropertyType.Boolean: valStr = iter.boolValue.ToString(); break;
-								case SerializedPropertyType.Enum: 
-									if(iter.enumValueIndex >= 0 && iter.enumValueIndex < iter.enumNames.Length)
-										valStr = iter.enumNames[iter.enumValueIndex]; 
-									break;
-							}
-
-							if (!string.IsNullOrEmpty(valStr) && valStr.ToLowerInvariant().Contains(lowerSearch))
-							{
-								match = true;
-								break;
-							}
+							matchDetails.Add(formattedDetail);
 						}
 					}
 				}
 
-				if (match)
+				if (nameMatch || matchDetails.Count > 0)
 				{
-					_filteredItems.Add(item);
+					_filteredItems.Add(new SearchMatch 
+					{ 
+						Item = item, 
+						MatchDetails = matchDetails 
+					});
 				}
 			}
 
+			// Auto-select Mass Edit
 			if (!string.IsNullOrEmpty(_searchString) && _filteredItems.Count > 0)
 			{
-				SerializedObject firstSO = new SerializedObject(_filteredItems[0]);
+				SerializedObject firstSO = new SerializedObject(_filteredItems[0].Item);
 				SerializedProperty prop = firstSO.FindProperty(_searchString); 
 				if (prop != null)
 				{
@@ -525,9 +555,9 @@ namespace NestedSO.SOEditor
 
 		private void ApplyMassEdit(SerializedObject sourceObj, SerializedProperty sourceProp)
 		{
-			foreach (var item in _filteredItems)
+			foreach (var match in _filteredItems)
 			{
-				SerializedObject so = new SerializedObject(item);
+				SerializedObject so = new SerializedObject(match.Item);
 				SerializedProperty prop = so.FindProperty(sourceProp.name);
 				
 				if (prop != null && prop.propertyType == sourceProp.propertyType)
@@ -563,18 +593,13 @@ namespace NestedSO.SOEditor
 
 		public static void RemoveAssetFromCollection(NestedSOCollectionBase collection, ScriptableObject asset)
 		{
-			if(!collection._HasAsset(asset))
-			{
-				throw new Exception($"Collection {collection} does not contains asset {asset}");
-			}
-
+			if(!collection._HasAsset(asset)) throw new Exception($"Collection {collection} does not contains asset {asset}");
 			RemoveAssetRecursive(collection, asset);
 			AssetDatabase.SaveAssets();
 			EditorUtility.SetDirty(collection);
 		}
 
-		public static T AddAssetToCollection<T>(NestedSOCollectionBase collection)
-			where T : ScriptableObject
+		public static T AddAssetToCollection<T>(NestedSOCollectionBase collection) where T : ScriptableObject
 		{
 			return AddAssetToCollection(collection, typeof(T)) as T;
 		}
@@ -582,27 +607,9 @@ namespace NestedSO.SOEditor
 		public static ScriptableObject AddAssetToCollection(NestedSOCollectionBase collection, Type type)
 		{
 			Type baseType = GetBaseTypeFromCollection(collection);
-
-			if(baseType == null)
-			{
-				throw new Exception($"No BaseType could be found for {collection}");
-			}
-
-			if(!baseType.IsAssignableFrom(type))
-			{
-				throw new Exception($"The collection requires BaseType {baseType}, which {type} does not derive from");
-			}
-
-			if(type.IsAbstract)
-			{
-				throw new Exception($"{type} is abstract, which can't be used to Create an Asset.");
-			}
-
-			if(type.IsInterface)
-			{
-				throw new Exception($"{type} is an interface, which can't be used to Create an Asset.");
-			}
-
+			if(baseType == null) throw new Exception($"No BaseType could be found for {collection}");
+			if(!baseType.IsAssignableFrom(type)) throw new Exception($"The collection requires BaseType {baseType}, which {type} does not derive from");
+			
 			ScriptableObject nestedSOItemInstance = CreateInstance(type);
 			nestedSOItemInstance.name = "New " + type.Name;
 			collection._AddAsset(nestedSOItemInstance);
@@ -619,23 +626,10 @@ namespace NestedSO.SOEditor
 
 		public static Type GetBaseTypeFromCollection(NestedSOCollectionBase collection)
 		{
-			if(collection == null)
-			{
-				return null;
-			}
-
+			if(collection == null) return null;
 			Type baseType;
-			try
-			{
-				baseType = collection.GetType();
-			}
-			catch
-			{
-				baseType = null;
-			}
-
+			try { baseType = collection.GetType(); } catch { baseType = null; }
 			Type[] types = null;
-
 			while(baseType != null && (types == null || types.Length == 0))
 			{
 				baseType = baseType.BaseType;
@@ -644,12 +638,7 @@ namespace NestedSO.SOEditor
 					types = baseType.GetGenericArguments();
 				}
 			}
-
-			if(types == null || types.Length == 0)
-			{
-				return null;
-			}
-
+			if(types == null || types.Length == 0) return null;
 			return types[0];
 		}
 
@@ -667,20 +656,16 @@ namespace NestedSO.SOEditor
 					RemoveAssetRecursive(internalCollection, internalCollectionItems[i]);
 				}
 			}
-
 			collection._RemoveAsset(nestedItem);
 			AssetDatabase.RemoveObjectFromAsset(nestedItem);
 			EditorUtility.SetDirty(nestedItem);
-
 			collection._MarkAsRemovedAsset(nestedItem);
 		}
 
 		private void SaveNavigationState()
 		{
-			// State must be unique to the target object (collection instance)
 			UnityEngine.Object target = serializedObject.targetObject;
 			string key = $"NestedSOEditor_{target.GetInstanceID()}";
-
 			StringBuilder dataSB = new StringBuilder();
 			for (int i = 0; i < _breadcrumbs.Count; i++)
 			{
@@ -690,10 +675,7 @@ namespace NestedSO.SOEditor
 					if (AssetDatabase.TryGetGUIDAndLocalFileIdentifier(obj, out string guid, out long localId))
 					{
 						dataSB.Append(obj.GetInstanceID());
-						if (i < _breadcrumbs.Count - 1)
-						{
-							dataSB.Append('/');
-						}
+						if (i < _breadcrumbs.Count - 1) dataSB.Append('/');
 					}
 				}
 			}
@@ -703,7 +685,6 @@ namespace NestedSO.SOEditor
 		private void LoadNavigationState(UnityEngine.Object target)
 		{
 			string key = $"NestedSOEditor_{target.GetInstanceID()}";
-
 			if (EditorPrefs.HasKey(key))
 			{
 				string data = EditorPrefs.GetString(key);
@@ -713,11 +694,10 @@ namespace NestedSO.SOEditor
 				{
 					if (int.TryParse(instanceIds[i], out int instanceID))
 					{
-						var obj = EditorUtility.InstanceIDToObject(instanceID);
+						var obj = EditorUtility.EntityIdToObject(instanceID);
 						if (obj != null) _breadcrumbs.Add(obj);
 					}
 				}
-				// Do not delete key, persist it for user convenience
 			}
 		}
 
