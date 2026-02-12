@@ -1,7 +1,11 @@
 # Changelog NestedSOCollection
 
+## v3.0.0 - 12/02/2026
+* `NestedSOList` support
+* Fixed `NestedSOCollectionEditor` Default Drawer not displaying
+
 ## v2.0.0 - 12/02/2026
-* Improved NestedSOCollectionEditor 
+* Improved `NestedSOCollectionEditor`
   * Added Search / Filtering of Items + Highlighting for
 	* Name
 	* Type
