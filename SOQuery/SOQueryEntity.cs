@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace NestedSO
@@ -13,9 +12,9 @@ namespace NestedSO
 		} = Guid.NewGuid().ToString();
 
 		[SerializeField]
-		private List<string> _tags = new List<string>();
+		private SOQueryTags _tags = new SOQueryTags();
 
-		public IReadOnlyList<string> Tags => _tags;
+		public IReadOnlySOQueryTags Tags => _tags;
 	}
 
 	public interface ISOQueryEntity
@@ -25,7 +24,7 @@ namespace NestedSO
 			get;
 		}
 
-		public IReadOnlyList<string> Tags
+		public IReadOnlySOQueryTags Tags
 		{
 			get;
 		}

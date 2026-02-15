@@ -5,7 +5,7 @@ using UnityEngine.Profiling;
 using System.Collections.Generic;
 using System.Linq;
 using System;
-using NestedSO;
+using System.Reflection;
 
 namespace NestedSO.SOEditor
 {
@@ -39,7 +39,7 @@ namespace NestedSO.SOEditor
 			InitializeStyles();
 
 			EditorGUILayout.Space(10);
-			DrawSOHeader();
+			DrawEditorHeader();
 
 			EditorGUILayout.Space(5);
 			DrawSearchArea();
@@ -66,7 +66,6 @@ namespace NestedSO.SOEditor
 
 			if (_resultTagButtonStyle == null)
 			{
-				// A clickable button that looks like a tag label
 				_resultTagButtonStyle = new GUIStyle("minibutton");
 				_resultTagButtonStyle.fontSize = 10;
 				_resultTagButtonStyle.alignment = TextAnchor.MiddleCenter;
@@ -84,7 +83,7 @@ namespace NestedSO.SOEditor
 			}
 		}
 
-		private void DrawSOHeader()
+		private void DrawEditorHeader()
 		{
 			EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 			EditorGUILayout.LabelField($"Database Contains {_db.SOQueryEntities.Count} Entities", EditorStyles.boldLabel);
@@ -118,11 +117,7 @@ namespace NestedSO.SOEditor
 			GUI.backgroundColor = new Color(0.7f, 1f, 0.7f);
 			if (GUILayout.Button("+ Add Filter", GUILayout.Width(100), GUILayout.Height(20)))
 			{
-				var dropdown = new TagSearchDropdown(new AdvancedDropdownState(), _db, (selectedTag) =>
-				{
-					AddTag(selectedTag);
-				});
-				dropdown.Show(new Rect(Event.current.mousePosition, Vector2.zero));
+				ShowAddFilterDropdown();
 			}
 			GUI.backgroundColor = originalColor;
 
@@ -134,10 +129,8 @@ namespace NestedSO.SOEditor
 
 			// --- 3. Pagination Logic ---
 			int totalPages = Mathf.CeilToInt((float)totalCount / ITEMS_PER_PAGE);
-			// Clamp current page to valid range (in case filter reduced count)
 			if (_currentPage >= totalPages) _currentPage = Mathf.Max(0, totalPages - 1);
 
-			// Get slice for current page
 			var pageResults = allResults.Skip(_currentPage * ITEMS_PER_PAGE).Take(ITEMS_PER_PAGE).ToList();
 
 			// --- 4. Stats & Pagination Controls ---
@@ -183,11 +176,80 @@ namespace NestedSO.SOEditor
 			EditorGUILayout.EndVertical();
 		}
 
+		public static HashSet<string> GetSOQueryEntityTags(SOQueryDatabase db)
+		{
+			HashSet<string> returnValue = new HashSet<string>();
+			foreach (var obj in db.SOQueryEntities)
+			{
+				if (obj is not ISOQueryEntity entity) continue;
+
+				// Add Manual Tags
+				foreach (var t in entity.Tags) returnValue.Add(t);
+
+				// Add Type Names (and base types)
+				Type tType = obj.GetType();
+				while (tType != null && tType != typeof(ScriptableObject))
+				{
+					returnValue.Add(tType.Name);
+					tType = tType.BaseType;
+				}
+			}
+
+			foreach (var tag in GetConstantTags())
+			{
+				returnValue.Add(tag);
+			}
+
+			return returnValue;
+		}
+
+		private void ShowAddFilterDropdown()
+		{
+			var dropdown = new TagSearchDropdown(new AdvancedDropdownState(), GetSOQueryEntityTags(_db), (selectedTag) =>
+			{
+				AddTag(selectedTag);
+			});
+			dropdown.Show(new Rect(Event.current.mousePosition, Vector2.zero));
+		}
+
+		public static IEnumerable<string> GetConstantTags()
+		{
+			var containerTypes = System.AppDomain.CurrentDomain.GetAssemblies()
+				.SelectMany(a => a.GetTypes())
+				.Where(t => t.IsDefined(typeof(SOQueryTagsContainerAttribute), false));
+
+			foreach (var type in containerTypes)
+			{
+				// A. Handle Enums
+				if (type.IsEnum)
+				{
+					foreach (string enumName in System.Enum.GetNames(type))
+					{
+						yield return enumName;
+					}
+				}
+				// B. Handle Static Classes / Structs
+				else
+				{
+					var fields = type.GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy)
+						.Where(fi => fi.IsLiteral && !fi.IsInitOnly && fi.FieldType == typeof(string));
+
+					foreach (var field in fields)
+					{
+						string value = (string)field.GetRawConstantValue();
+						if (!string.IsNullOrEmpty(value))
+						{
+							yield return value;
+						}
+					}
+				}
+			}
+		}
+
 		private void DrawEntityLine(ScriptableObject obj)
 		{
 			EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
 
-			// Object Field
 			using (new EditorGUI.DisabledScope(true))
 			{
 				EditorGUILayout.ObjectField(obj, typeof(ScriptableObject), false, GUILayout.Width(180));
@@ -195,19 +257,16 @@ namespace NestedSO.SOEditor
 
 			if (obj is ISOQueryEntity entity)
 			{
-				// Memory Size
 				long size = Profiler.GetRuntimeMemorySizeLong(obj);
 				EditorGUILayout.LabelField(FormatBytes(size), EditorStyles.miniLabel, GUILayout.Width(45));
 
-				// --- Clickable Type Pill ---
 				string typeName = obj.GetType().Name;
 				if (GUILayout.Button(typeName, _typeButtonStyle))
 				{
 					AddTag(typeName);
 				}
 
-				// --- Clickable Tag Pills ---
-				foreach (var tag in entity.Tags.Take(6)) // Show max 6 tags
+				foreach (var tag in entity.Tags.Take(6))
 				{
 					if (GUILayout.Button(tag, _resultTagButtonStyle))
 					{
@@ -225,8 +284,6 @@ namespace NestedSO.SOEditor
 			EditorGUILayout.EndHorizontal();
 		}
 
-		// --- Logic Methods ---
-
 		private void AddTag(string newTag)
 		{
 			var tags = _searchString.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).ToList();
@@ -236,7 +293,6 @@ namespace NestedSO.SOEditor
 			{
 				if (tags.Count > 0) _searchString += ", ";
 				_searchString += trimmed;
-
 				_currentPage = 0;
 				Repaint();
 			}

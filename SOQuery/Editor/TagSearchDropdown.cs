@@ -1,5 +1,5 @@
-using UnityEngine;
 using UnityEditor.IMGUI.Controls;
+using UnityEngine;
 using System.Collections.Generic;
 using System.Linq;
 using System;
@@ -8,14 +8,13 @@ namespace NestedSO.SOEditor
 {
 	public class TagSearchDropdown : AdvancedDropdown
 	{
-		private SOQueryDatabase _db;
 		private Action<string> _onTagSelected;
+		private HashSet<string> _allTags;
 
-		public TagSearchDropdown(AdvancedDropdownState state, SOQueryDatabase db, Action<string> onTagSelected) : base(state)
+		public TagSearchDropdown(AdvancedDropdownState state, IEnumerable<string> allTags, Action<string> onTagSelected) : base(state)
 		{
-			_db = db;
 			_onTagSelected = onTagSelected;
-			// Set the size of the popup window
+			_allTags = new HashSet<string>(allTags);
 			minimumSize = new Vector2(250, 300);
 		}
 
@@ -23,29 +22,15 @@ namespace NestedSO.SOEditor
 		{
 			var root = new AdvancedDropdownItem("Tags");
 
-			// 1. Collect all unique tags and types
-			HashSet<string> allItems = new HashSet<string>();
-
-			foreach (var obj in _db.SOQueryEntities)
+			if (_allTags.Count == 0)
 			{
-				if (obj is not ISOQueryEntity entity) continue;
-
-				// Add Manual Tags
-				foreach (var t in entity.Tags) allItems.Add(t);
-
-				// Add Type Names (and base types)
-				Type tType = obj.GetType();
-				while (tType != null && tType != typeof(ScriptableObject))
-				{
-					allItems.Add(tType.Name);
-					tType = tType.BaseType;
-				}
+				root.AddChild(new AdvancedDropdownItem("(No Tags Found in DB)"));
+				return root;
 			}
 
-			// 2. Sort and Add to Dropdown
-			foreach (var item in allItems.OrderBy(x => x))
+			foreach (var tag in _allTags.OrderBy(x => x))
 			{
-				root.AddChild(new AdvancedDropdownItem(item));
+				root.AddChild(new AdvancedDropdownItem(tag));
 			}
 
 			return root;
@@ -53,7 +38,10 @@ namespace NestedSO.SOEditor
 
 		protected override void ItemSelected(AdvancedDropdownItem item)
 		{
-			_onTagSelected?.Invoke(item.name);
+			if (item.name != "(No Tags Found in DB)")
+			{
+				_onTagSelected?.Invoke(item.name);
+			}
 		}
 	}
 }
