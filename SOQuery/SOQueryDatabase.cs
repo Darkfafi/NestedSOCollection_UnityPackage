@@ -3,9 +3,9 @@ using UnityEngine;
 
 namespace NestedSO
 {
-    [CreateAssetMenu(fileName = "SOQueryDatabase", menuName = "NestedSO/SOQueryDatabase")]
-    public class SOQueryDatabase : ScriptableObject
-    {
-        public List<SOQueryEntity> SOQueryEntities = new List<SOQueryEntity>();
-    }
+	[CreateAssetMenu(fileName = "SOQueryDatabase", menuName = "NestedSO/SOQueryDatabase")]
+	public class SOQueryDatabase : ScriptableObject
+	{
+		public List<ScriptableObject> SOQueryEntities = new List<ScriptableObject>();
+	}
 }

@@ -5,104 +5,130 @@ using UnityEngine;
 
 namespace NestedSO
 {
-    public static class SOQuery
-    {
-        // Baked Caching
-        private static Dictionary<Type, Dictionary<string, HashSet<SOQueryEntity>>> _index;
+	public static class SOQuery
+	{
+		// 1. The Master Index: "Tag" (or ClassName) -> Set of Entities
+		private static Dictionary<string, HashSet<ISOQueryEntity>> _tagIndex;
 
-        // Real Time Caching
-        private static Dictionary<Type, Dictionary<string, object>> _queryCache;
+		// 2. The ID Lookup: "ID" -> Entity
+		private static Dictionary<string, ISOQueryEntity> _idIndex;
 
-        private static bool _isInitialized = false;
+		// 3. The Query Cache: "Tag|Tag|Tag" -> List Result
+		private static Dictionary<string, object> _queryCache;
 
-        public static void Initialize(SOQueryDatabase database)
-        {
-            if (_isInitialized) return;
+		private static bool _isInitialized = false;
 
-            _index = new Dictionary<Type, Dictionary<string, HashSet<SOQueryEntity>>>();
-            _queryCache = new Dictionary<Type, Dictionary<string, object>>();
+		public static void Initialize(SOQueryDatabase database)
+		{
+			if (_isInitialized) return;
 
-            // Build the base index (same as before)
-            foreach (var config in database.SOQueryEntities)
-            {
-                if (config == null) continue;
+			_tagIndex = new Dictionary<string, HashSet<ISOQueryEntity>>();
+			_idIndex = new Dictionary<string, ISOQueryEntity>();
+			_queryCache = new Dictionary<string, object>();
 
-                Type currentType = config.GetType();
-                while (currentType != null && currentType != typeof(ScriptableObject))
-                {
-                    if (!_index.ContainsKey(currentType))
-                        _index[currentType] = new Dictionary<string, HashSet<SOQueryEntity>>();
+			foreach (var obj in database.SOQueryEntities)
+			{
+				if (obj is not ISOQueryEntity entity) continue;
 
-                    foreach (var tag in config.Tags)
-                    {
-                        if (!_index[currentType].ContainsKey(tag))
-                            _index[currentType][tag] = new HashSet<SOQueryEntity>();
+				// A. Map by ID
+				if (!string.IsNullOrEmpty(entity.Id))
+				{
+					_idIndex[entity.Id] = entity;
+				}
 
-                        _index[currentType][tag].Add(config);
-                    }
-                    currentType = currentType.BaseType;
-                }
-            }
+				// B. Map by ManualTags
+				foreach (var tag in entity.Tags)
+				{
+					AddToIndex(tag, entity);
+				}
 
-            _isInitialized = true;
-        }
+				Type currentType = obj.GetType();
+				while (currentType != null && currentType != typeof(ScriptableObject))
+				{
+					AddToIndex(currentType.Name, entity);
+					currentType = currentType.BaseType;
+				}
+			}
 
-        public static List<T> Find<T>(params string[] tags) where T : SOQueryEntity
-        {
-            if (!_isInitialized)
-            {
-                Debug.LogError("SOQuery has not been initialized with a database yet!");
-                return new List<T>();
-            }
+			_isInitialized = true;
+		}
 
-            Type type = typeof(T);
+		private static void AddToIndex(string tag, ISOQueryEntity entity)
+		{
+			if (!_tagIndex.ContainsKey(tag))
+			{
+				_tagIndex[tag] = new HashSet<ISOQueryEntity>();
+			}
+			_tagIndex[tag].Add(entity);
+		}
 
-            // 1. Generate a consistent cache key (Sorting ensures order doesn't matter)
-            string cacheKey = string.Join("|", tags.OrderBy(t => t));
+		public static T Get<T>(string id) where T : class, ISOQueryEntity
+		{
+			if (_idIndex.TryGetValue(id, out var entity))
+			{
+				return entity as T;
+			}
+			return null;
+		}
 
-            // 2. Check the Cache FIRST
-            if (!_queryCache.ContainsKey(type))
-            {
-                _queryCache[type] = new Dictionary<string, object>();
-            }
+		public static List<T> Find<T>(params string[] tags) where T : class, ISOQueryEntity
+		{
+			// 1. Combine user tags with the Type name
+			var allTags = new List<string>(tags);
 
-            if (_queryCache[type].TryGetValue(cacheKey, out object cachedResult))
-            {
-                // CACHE HIT: It's baked in! Return instantly.
-                return (List<T>)cachedResult;
-            }
+			// Only add the type name if it's not the generic interface
+			if (typeof(T) != typeof(ISOQueryEntity))
+			{
+				allTags.Add(typeof(T).Name);
+			}
 
-            // 3. CACHE MISS: We haven't searched this exact combination yet.
-            if (!_index.ContainsKey(type)) return new List<T>();
-            var typeIndex = _index[type];
-            HashSet<SOQueryEntity> results = null;
+			// 2. Sort tags to generate a consistent Cache Key
+			allTags.Sort();
+			string cacheKey = string.Join("|", allTags);
 
-            foreach (var tag in tags)
-            {
-                if (!typeIndex.ContainsKey(tag))
-                    return new List<T>();
+			// 3. Check Cache
+			if (_queryCache.TryGetValue(cacheKey, out object cachedResult))
+			{
+				return (List<T>)cachedResult;
+			}
 
-                var taggedConfigs = typeIndex[tag];
+			// 4. Perform Intersection
+			HashSet<ISOQueryEntity> resultSet = null;
 
-                if (results == null)
-                {
-                    results = new HashSet<SOQueryEntity>(taggedConfigs);
-                }
-                else
-                {
-                    results.IntersectWith(taggedConfigs);
-                }
-            }
+			foreach (var tag in allTags)
+			{
+				if (!_tagIndex.ContainsKey(tag))
+				{
+					// If any tag is missing, the result is empty.
+					resultSet = null;
+					break;
+				}
 
-            if (results == null) return new List<T>();
+				var entitiesWithTag = _tagIndex[tag];
 
-            // 4. Bake the final result into a List
-            List<T> finalResult = results.Cast<T>().ToList();
+				if (resultSet == null)
+				{
+					resultSet = new HashSet<ISOQueryEntity>(entitiesWithTag);
+				}
+				else
+				{
+					resultSet.IntersectWith(entitiesWithTag);
+				}
+			}
 
-            // 5. Save it to the cache for next time
-            _queryCache[type][cacheKey] = finalResult;
+			// 5. Convert and Cache
+			var finalResult = resultSet == null ? new List<T>() : resultSet.Cast<T>().ToList();
+			_queryCache[cacheKey] = finalResult;
 
-            return finalResult;
-        }
-    }
+			return finalResult;
+		}
+
+		public static void Clear()
+		{
+			_tagIndex?.Clear();
+			_idIndex?.Clear();
+			_queryCache?.Clear();
+			_isInitialized = false;
+		}
+	}
 }
