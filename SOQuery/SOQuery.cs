@@ -139,59 +139,76 @@ namespace NestedSO
 			return null;
 		}
 
+		public static T FindFirst<T>(params string[] tags)
+			where T : class, ISOQueryEntity
+		{
+			if (TryFindFirst(out T target, tags))
+			{
+				return target;
+			}
+
+			return default;
+		}
+
+		public static bool TryFindFirst<T>(out T target, params string[] tags)
+			where T : class, ISOQueryEntity
+		{
+			var entities = Find<T>(tags);
+			if (entities.Count > 0)
+			{
+				target = entities[0];
+				return true;
+			}
+
+			target = null;
+			return false;
+		}
+
 		public static List<T> Find<T>(params string[] tags) where T : class, ISOQueryEntity
 		{
-			// 1. Combine user tags with the Type name
 			var searchTags = new List<string>(tags);
 
-			// Only add the type name if it's not the generic interface. 
-			// This allows Find<MissionConfig>("Hard") to match the pre-warmed query "MissionConfig, Hard".
 			if (typeof(T) != typeof(ISOQueryEntity))
 			{
 				searchTags.Add(typeof(T).Name);
 			}
 
-			// 2. Generate Cache Key
 			searchTags.Sort();
 			string cacheKey = string.Join("|", searchTags);
 
-			// 3. Check Cache
 			if (_queryCache.TryGetValue(cacheKey, out List<ISOQueryEntity> cachedResult))
 			{
-				// Optimization: If T is ISOQueryEntity, return directly (No alloc)
 				if (typeof(T) == typeof(ISOQueryEntity))
 				{
 					return cachedResult as List<T>;
 				}
 
-				// Otherwise, we must cast the list. 
-				// This is O(N) copy, but usually much faster than calculating intersections.
 				return cachedResult.Cast<T>().ToList();
 			}
 
-			// 4. Cache Miss - Perform Intersection
 			HashSet<ISOQueryEntity> resultSet = null;
 
 			foreach (var tag in searchTags)
 			{
 				if (!_tagIndex.TryGetValue(tag, out var entitiesWithTag))
 				{
-					resultSet = null; // Missing tag = Empty result
+					resultSet = null;
 					break;
 				}
 
 				if (resultSet == null)
+				{
 					resultSet = new HashSet<ISOQueryEntity>(entitiesWithTag);
+				}
 				else
+				{
 					resultSet.IntersectWith(entitiesWithTag);
+				}
 			}
 
-			// 5. Store Result in Cache
-			// We store as List<ISOQueryEntity> so it can be reused by other generic calls
 			var finalResult = resultSet == null ? new List<ISOQueryEntity>() : resultSet.ToList();
 			_queryCache[cacheKey] = finalResult;
 
-			// 6. Return casted result
 			return finalResult.Cast<T>().ToList();
 		}
 
