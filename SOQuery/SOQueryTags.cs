@@ -33,12 +33,21 @@ namespace NestedSO
 			set => _tags[index] = value;
 		}
 
+		public SOQueryTags(params string[] tags)
+		{
+			if(tags != null)
+			{
+				_tags.AddRange(tags);
+			}
+		}
+
 		public void AddRange(IEnumerable<string> collection) => _tags.AddRange(collection);
 		public int IndexOf(string item) => _tags.IndexOf(item);
 		public void Insert(int index, string item) => _tags.Insert(index, item);
 		public void RemoveAt(int index) => _tags.RemoveAt(index);
 		public void Clear() => _tags.Clear();
 		public void CopyTo(string[] array, int arrayIndex) => _tags.CopyTo(array, arrayIndex);
+		public SOQueryTags Copy() => new SOQueryTags(_tags.ToArray());
 
 		public IEnumerator<string> GetEnumerator() => _tags.GetEnumerator();
 		IEnumerator IEnumerable.GetEnumerator() => _tags.GetEnumerator();
