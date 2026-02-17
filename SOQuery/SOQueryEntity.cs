@@ -12,9 +12,41 @@ namespace NestedSO
 		} = Guid.NewGuid().ToString();
 
 		[SerializeField]
-		private SOQueryTags _tags = new SOQueryTags();
+		protected SOQueryTags _tags = new SOQueryTags();
 
 		public IReadOnlySOQueryTags Tags => _tags;
+
+		public virtual void OnEnable()
+		{
+			_tags.ClearRuntime();
+			SyncTags(_tags);
+		}
+		public virtual void OnValidate()
+		{
+			_tags.ClearRuntime();
+			SyncTags(_tags);
+		}
+
+#if UNITY_EDITOR
+		public void EDITOR_SetTags(SOQueryTags tags)
+		{
+			_tags.Clear();
+			if(tags != null)
+			{
+				foreach (var tag in tags)
+				{
+					_tags.Add(tag);
+				}
+			}
+		}
+
+		public void EDITOR_SetId(string id)
+		{
+			Id = id;
+		}
+#endif
+
+		protected abstract void SyncTags(SOQueryTags tags);
 	}
 
 	public interface ISOQueryEntity
