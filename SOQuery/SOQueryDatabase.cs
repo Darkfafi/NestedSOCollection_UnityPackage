@@ -15,11 +15,7 @@ namespace NestedSO
 		[Tooltip("Define queries here (e.g. 'Mission, Hard') to pre-calculate their results during the build step.")]
 		public List<string> PrewarmQueries = new List<string>();
 
-		// =================================================================================================
-		// SERIALIZED CACHE (Saved to Disk)
-		// Unity cannot serialize Dictionaries, so we use Lists of Structs.
-		// =================================================================================================
-
+		// Cached Indexing
 		[SerializeField]
 		private List<TagIndexEntry> _serializedTagIndex = new List<TagIndexEntry>();
 
@@ -29,29 +25,17 @@ namespace NestedSO
 		[SerializeField]
 		private List<IdIndexEntry> _serializedIdIndex = new List<IdIndexEntry>();
 
-		// =================================================================================================
-		// RUNTIME STATE (Dictionaries for O(1) Lookup)
-		// =================================================================================================
-
+		// Runtime Look-up Maps (based on Index)
 		private Dictionary<string, HashSet<ISOQueryEntity>> _runtimeTagIndex;
 		private Dictionary<string, List<ISOQueryEntity>> _runtimeQueryCache;
 		private Dictionary<string, ISOQueryEntity> _runtimeIdIndex;
 
 		private bool _isInitialized = false;
 
-		// =================================================================================================
-		// PUBLIC API
-		// =================================================================================================
-
-		/// <summary>
-		/// Hydrates the runtime dictionaries from the serialized cache. 
-		/// Call this at game startup (e.g. Awake or Bootstrapper).
-		/// </summary>
 		public void Initialize()
 		{
 			if (_isInitialized) return;
 
-			// 1. Hydrate Tag Index
 			_runtimeTagIndex = new Dictionary<string, HashSet<ISOQueryEntity>>(_serializedTagIndex.Count);
 			foreach (var entry in _serializedTagIndex)
 			{
@@ -63,7 +47,6 @@ namespace NestedSO
 				_runtimeTagIndex[entry.Tag] = set;
 			}
 
-			// 2. Hydrate Query Cache
 			_runtimeQueryCache = new Dictionary<string, List<ISOQueryEntity>>(_serializedQueryCache.Count);
 			foreach (var entry in _serializedQueryCache)
 			{
@@ -75,7 +58,6 @@ namespace NestedSO
 				_runtimeQueryCache[entry.QueryKey] = list;
 			}
 
-			// 3. Hydrate ID Index
 			_runtimeIdIndex = new Dictionary<string, ISOQueryEntity>(_serializedIdIndex.Count);
 			foreach (var entry in _serializedIdIndex)
 			{
@@ -122,31 +104,27 @@ namespace NestedSO
 		{
 			EnsureInitialized();
 
-			// 1. Prepare Query Key
 			var searchTags = new List<string>(tags);
 			if (typeof(T) != typeof(ISOQueryEntity))
 			{
-				// Implicitly add the Type Name as a tag requirement
 				searchTags.Add(typeof(T).Name);
 			}
 			searchTags.Sort();
 			string cacheKey = string.Join("|", searchTags);
 
-			// 2. Check Cache
+			// Check Cache
 			if (_runtimeQueryCache.TryGetValue(cacheKey, out List<ISOQueryEntity> cachedResult))
 			{
 				if (typeof(T) == typeof(ISOQueryEntity)) return cachedResult as List<T>; // Unsafe cast optimization
 				return cachedResult.Cast<T>().ToList();
 			}
 
-			// 3. Perform Intersection (Cache Miss)
 			HashSet<ISOQueryEntity> resultSet = null;
 
 			foreach (var tag in searchTags)
 			{
 				if (!_runtimeTagIndex.TryGetValue(tag, out var entitiesWithTag))
 				{
-					// If any tag is missing, the intersection is empty.
 					resultSet = null;
 					break;
 				}
@@ -157,7 +135,6 @@ namespace NestedSO
 
 			var finalResult = resultSet == null ? new List<ISOQueryEntity>() : resultSet.ToList();
 
-			// 4. Update Cache (Runtime only)
 			_runtimeQueryCache[cacheKey] = finalResult;
 
 			return finalResult.Cast<T>().ToList();
@@ -173,10 +150,6 @@ namespace NestedSO
 		// INDEX BUILDING (Editor / Build Time)
 		// =================================================================================================
 
-		/// <summary>
-		/// Scans all entities, extracts tags, and builds the serialized lists.
-		/// Call this from an Editor Script or Button.
-		/// </summary>
 		public void RebuildIndex()
 		{
 			_serializedTagIndex.Clear();
@@ -186,7 +159,6 @@ namespace NestedSO
 			var tempTagMap = new Dictionary<string, HashSet<ScriptableObject>>();
 			var tempIdMap = new Dictionary<string, ScriptableObject>();
 
-			// 1. Build Tag Index & ID Index
 			foreach (var obj in SOQueryEntities)
 			{
 				if (obj == null) continue;
@@ -214,14 +186,11 @@ namespace NestedSO
 				}
 			}
 
-			// Flatten Tag Map to Serializable List
 			foreach (var kvp in tempTagMap)
 			{
 				_serializedTagIndex.Add(new TagIndexEntry { Tag = kvp.Key, Entities = kvp.Value.ToList() });
 			}
 
-			// 2. Run Prewarm Queries
-			// We use the temporary maps we just built to simulate the query engine
 			foreach (var queryStr in PrewarmQueries)
 			{
 				var tags = ParseTags(queryStr, sort: true);
@@ -229,7 +198,6 @@ namespace NestedSO
 
 				string key = string.Join("|", tags);
 
-				// Perform Intersection logic using our temp map
 				HashSet<ScriptableObject> result = null;
 				bool possible = true;
 
@@ -251,12 +219,10 @@ namespace NestedSO
 				}
 				else
 				{
-					// Cache empty result to save perf
 					_serializedQueryCache.Add(new QueryCacheEntry { QueryKey = key, Results = new List<ScriptableObject>() });
 				}
 			}
 
-			// Mark as dirty so Unity saves the changes
 #if UNITY_EDITOR
 			UnityEditor.EditorUtility.SetDirty(this);
 #endif

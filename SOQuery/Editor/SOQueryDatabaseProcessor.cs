@@ -50,20 +50,16 @@ namespace NestedSO.Processor
 			AssetDatabase.SaveAssets();
 		}
 
-		// --- 1. POPULATE LOGIC (Restored Recursive Search) ---
-
 		public static void PopulateDatabase(SOQueryDatabase db)
 		{
 			if (db == null) return;
 
 			db.SOQueryEntities.Clear();
 
-			// Use the recursive finder to get standalone AND nested entities
 			ForEachScriptableObjects<ScriptableObject>(entity =>
 			{
 				if (entity is ISOQueryEntity)
 				{
-					// Filter out the DB itself and any excluded types
 					if (entity != db && !SOQueryDatabase.IsTypeExcluded(entity.GetType()))
 					{
 						db.SOQueryEntities.Add(entity);
@@ -74,9 +70,6 @@ namespace NestedSO.Processor
 			EditorUtility.SetDirty(db);
 		}
 
-		/// <summary>
-		/// Recursively finds ScriptableObjects, including those nested inside Collections.
-		/// </summary>
 		public static void ForEachScriptableObjects<T>(Action<T> method) where T : ScriptableObject
 		{
 			string[] guids = AssetDatabase.FindAssets($"t:{nameof(ScriptableObject)}");
@@ -95,14 +88,11 @@ namespace NestedSO.Processor
 
 			void CallMethod(ScriptableObject _so)
 			{
-				// 1. Process the object itself
 				if (_so is T castedSO)
 				{
 					method(castedSO);
 				}
 
-				// 2. Recursively check for nested items
-				// This assumes NestedSOCollectionBase is the base class for your collections
 				if (_so is NestedSOCollectionBase nestedSOCollection)
 				{
 					foreach (var x in nestedSOCollection.GetRawItems())
@@ -115,9 +105,6 @@ namespace NestedSO.Processor
 				}
 			}
 		}
-
-		// --- 2. CACHE LOGIC (Standard Indexing) ---
-
 		public static void BuildCache(SOQueryDatabase db)
 		{
 			if (db == null) return;

@@ -110,22 +110,19 @@ namespace NestedSO.SOEditor
 			}
 			EditorGUILayout.EndHorizontal();
 
-			// --- HEALTH CHECK ---
 			EditorGUILayout.Space(5);
 			if (GUILayout.Button("Verify Integrity", GUILayout.Height(24)))
 			{
 				RunCacheIntegrityCheck();
 			}
 
-			// Draw Validation Result & Fix Button
 			if (!string.IsNullOrEmpty(_cacheValidationResult))
 			{
 				EditorGUILayout.HelpBox(_cacheValidationResult, _cacheValidationType);
 
-				// --- NEW: FIX BUTTON ---
 				if (_hasDuplicateErrors)
 				{
-					GUI.backgroundColor = new Color(1f, 0.7f, 0.7f); // Reddish tint
+					GUI.backgroundColor = new Color(1f, 0.7f, 0.7f);
 					if (GUILayout.Button("Auto-Fix Duplicates (Assign New IDs)", GUILayout.Height(30)))
 					{
 						FixDuplicateIDs();
@@ -146,15 +143,11 @@ namespace NestedSO.SOEditor
 			serializedObject.ApplyModifiedProperties();
 		}
 
-		// ==================================================================================
-		// INTEGRITY & REPAIR LOGIC
-		// ==================================================================================
-
 		private void RunCacheIntegrityCheck()
 		{
-			_hasDuplicateErrors = false; // Reset flag
+			_hasDuplicateErrors = false;
 
-			// 1. Check Source Data for Duplicates
+			// Check Source Data for Duplicates
 			var idMap = new Dictionary<string, List<string>>();
 			int nullRefs = 0;
 
@@ -177,7 +170,7 @@ namespace NestedSO.SOEditor
 
 			if (duplicates.Count > 0)
 			{
-				_hasDuplicateErrors = true; // Enable Fix Button
+				_hasDuplicateErrors = true;
 				string errorMsg = "CRITICAL: Duplicate IDs detected!\n";
 				foreach (var dup in duplicates)
 				{
@@ -189,7 +182,7 @@ namespace NestedSO.SOEditor
 				return;
 			}
 
-			// 2. Check Nulls
+			// Check Nulls
 			if (nullRefs > 0)
 			{
 				_cacheValidationResult = $"Database contains {nullRefs} null references. Please click 'Populate List'.";
@@ -197,7 +190,7 @@ namespace NestedSO.SOEditor
 				return;
 			}
 
-			// 3. Check Serialized Cache vs Source Count
+			// Check Serialized Cache vs Source Count
 			var idIndexProp = serializedObject.FindProperty("_serializedIdIndex");
 
 			if (idIndexProp.arraySize != idMap.Count)
@@ -224,17 +217,13 @@ namespace NestedSO.SOEditor
 
 				if (seenIds.Contains(entity.Id))
 				{
-					// This is a duplicate (the latter one found)
-					// Generate new ID: OldID_RandomSuffix
 					string newId = $"{entity.Id}_{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}";
 
-					// Use SerializedObject to safely assign the new ID 
-					// (This works regardless of whether the setter is private)
 					SerializedObject so = new SerializedObject(obj);
 					SerializedProperty idProp = so.FindProperty("Id");
 					if (idProp == null) idProp = so.FindProperty("id");
 					if (idProp == null) idProp = so.FindProperty("_id");
-					if (idProp == null) idProp = so.FindProperty("<Id>k__BackingField"); // Auto-property backing field
+					if (idProp == null) idProp = so.FindProperty("<Id>k__BackingField");
 
 					if (idProp != null)
 					{
@@ -256,22 +245,18 @@ namespace NestedSO.SOEditor
 
 			if (fixedCount > 0)
 			{
-				AssetDatabase.SaveAssets(); // Ensure changes are written to disk
-				SOQueryDatabaseProcessor.BuildCache(_db); // Rebuild cache with new IDs
-				RunCacheIntegrityCheck(); // Re-verify
+				AssetDatabase.SaveAssets();
+				SOQueryDatabaseProcessor.BuildCache(_db);
+				RunCacheIntegrityCheck();
 			}
 		}
-
-		// ==================================================================================
-		// QUERY AREA
-		// ==================================================================================
 
 		private void DrawSearchArea()
 		{
 			EditorGUILayout.LabelField("Query Playground", EditorStyles.boldLabel);
 			EditorGUILayout.BeginVertical("box");
 
-			// 1. Search Bar & Pills
+			// Search Bar & Pills
 			EditorGUILayout.BeginHorizontal();
 			var currentTags = SOQueryDatabase.ParseTags(_searchString);
 			foreach (var tag in currentTags.ToList())
@@ -285,11 +270,11 @@ namespace NestedSO.SOEditor
 			GUI.backgroundColor = c;
 			EditorGUILayout.EndHorizontal();
 
-			// 2. Calculate Results (Live vs Cache)
+			// Calculate Results (Live vs Cache)
 			var liveResults = FilterList(currentTags);
 			ValidateCacheAgainstLive(currentTags, liveResults);
 
-			// 3. Draw Cache Status Banner
+			// Draw Cache Status Banner
 			if (_isCacheStale)
 			{
 				EditorGUILayout.BeginVertical(EditorStyles.helpBox);
@@ -323,7 +308,7 @@ namespace NestedSO.SOEditor
 				EditorGUILayout.EndHorizontal();
 			}
 
-			// 4. Pagination
+			// Pagination
 			int totalCount = liveResults.Count;
 			int totalPages = Mathf.CeilToInt((float)totalCount / ITEMS_PER_PAGE);
 			if (_currentPage >= totalPages) _currentPage = Mathf.Max(0, totalPages - 1);
@@ -344,7 +329,7 @@ namespace NestedSO.SOEditor
 			}
 			EditorGUILayout.EndHorizontal();
 
-			// 5. Result List
+			// Result
 			_showConfigs = EditorGUILayout.Foldout(_showConfigs, "Results Preview", true);
 			if (_showConfigs)
 			{
@@ -517,10 +502,6 @@ namespace NestedSO.SOEditor
 			if (newExpanded && obj is ISOQueryEntity expandedEntity) DrawExpandedDetails(obj, expandedEntity);
 			EditorGUILayout.EndVertical();
 		}
-
-		// ==================================================================================
-		// REST OF CLASS (Tags Explorer, Headers, Helpers)
-		// ==================================================================================
 
 		private void AnalyzeTags()
 		{
