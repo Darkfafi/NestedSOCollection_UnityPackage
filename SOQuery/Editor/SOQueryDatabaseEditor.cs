@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System;
 using System.Reflection;
+using NestedSO;
 using NestedSO.Processor;
 
 namespace NestedSO.SOEditor
@@ -42,10 +43,15 @@ namespace NestedSO.SOEditor
 		public enum TagSourceFilter { Type = 1, Container = 2, Editor = 4, Runtime = 8 }
 		private TagSourceFilter _explorerFilter = (TagSourceFilter)~0;
 
-		// --- Cache State (New) ---
+		// --- Cache State ---
 		private HashSet<int> _cachedResultIDs = new HashSet<int>();
 		private bool _isCacheStale = false;
 		private string _staleReason = "";
+
+		// --- Integrity State ---
+		private string _cacheValidationResult = "";
+		private MessageType _cacheValidationType = MessageType.None;
+		private bool _hasDuplicateErrors = false; // <--- NEW FLAG
 
 		// --- Expansion State ---
 		private HashSet<int> _expandedItems = new HashSet<int>();
@@ -82,7 +88,7 @@ namespace NestedSO.SOEditor
 			DrawTagsExplorer();
 
 			EditorGUILayout.Space(5);
-			DrawSearchArea(); // <--- Modified to include Cache Validation
+			DrawSearchArea();
 
 			// --- DATABASE OPERATIONS ---
 			EditorGUILayout.Space(10);
@@ -92,7 +98,7 @@ namespace NestedSO.SOEditor
 			if (GUILayout.Button(new GUIContent(" Populate List", EditorGUIUtility.IconContent("d_Folder Icon").image), GUILayout.Height(24)))
 			{
 				SOQueryDatabaseProcessor.PopulateDatabase(_db);
-				SOQueryDatabaseProcessor.BuildCache(_db); // Auto-cache on populate to keep sync
+				SOQueryDatabaseProcessor.BuildCache(_db);
 				EditorUtility.SetDirty(_db);
 				AnalyzeTags();
 			}
@@ -104,12 +110,160 @@ namespace NestedSO.SOEditor
 			}
 			EditorGUILayout.EndHorizontal();
 
+			// --- HEALTH CHECK ---
+			EditorGUILayout.Space(5);
+			if (GUILayout.Button("Verify Integrity", GUILayout.Height(24)))
+			{
+				RunCacheIntegrityCheck();
+			}
+
+			// Draw Validation Result & Fix Button
+			if (!string.IsNullOrEmpty(_cacheValidationResult))
+			{
+				EditorGUILayout.HelpBox(_cacheValidationResult, _cacheValidationType);
+
+				// --- NEW: FIX BUTTON ---
+				if (_hasDuplicateErrors)
+				{
+					GUI.backgroundColor = new Color(1f, 0.7f, 0.7f); // Reddish tint
+					if (GUILayout.Button("Auto-Fix Duplicates (Assign New IDs)", GUILayout.Height(30)))
+					{
+						FixDuplicateIDs();
+					}
+					GUI.backgroundColor = Color.white;
+				}
+			}
+
+			EditorGUILayout.Space(10);
+			EditorGUILayout.LabelField("Raw Data", EditorStyles.boldLabel);
+			SerializedProperty listProp = serializedObject.FindProperty("SOQueryEntities");
+
+			EditorGUI.BeginChangeCheck();
+			EditorGUILayout.PropertyField(listProp, true);
+			if (EditorGUI.EndChangeCheck()) AnalyzeTags();
+
 			EditorGUILayout.Space(10);
 			serializedObject.ApplyModifiedProperties();
 		}
 
 		// ==================================================================================
-		// QUERY AREA (Merged with Cache Validator)
+		// INTEGRITY & REPAIR LOGIC
+		// ==================================================================================
+
+		private void RunCacheIntegrityCheck()
+		{
+			_hasDuplicateErrors = false; // Reset flag
+
+			// 1. Check Source Data for Duplicates
+			var idMap = new Dictionary<string, List<string>>();
+			int nullRefs = 0;
+
+			foreach (var obj in _db.SOQueryEntities)
+			{
+				if (obj == null)
+				{
+					nullRefs++;
+					continue;
+				}
+
+				if (obj is ISOQueryEntity entity && !string.IsNullOrEmpty(entity.Id))
+				{
+					if (!idMap.ContainsKey(entity.Id)) idMap[entity.Id] = new List<string>();
+					idMap[entity.Id].Add(obj.name);
+				}
+			}
+
+			var duplicates = idMap.Where(kvp => kvp.Value.Count > 1).ToList();
+
+			if (duplicates.Count > 0)
+			{
+				_hasDuplicateErrors = true; // Enable Fix Button
+				string errorMsg = "CRITICAL: Duplicate IDs detected!\n";
+				foreach (var dup in duplicates)
+				{
+					errorMsg += $"- ID '{dup.Key}' used by: {string.Join(", ", dup.Value)}\n";
+				}
+
+				_cacheValidationResult = errorMsg;
+				_cacheValidationType = MessageType.Error;
+				return;
+			}
+
+			// 2. Check Nulls
+			if (nullRefs > 0)
+			{
+				_cacheValidationResult = $"Database contains {nullRefs} null references. Please click 'Populate List'.";
+				_cacheValidationType = MessageType.Warning;
+				return;
+			}
+
+			// 3. Check Serialized Cache vs Source Count
+			var idIndexProp = serializedObject.FindProperty("_serializedIdIndex");
+
+			if (idIndexProp.arraySize != idMap.Count)
+			{
+				_cacheValidationResult = $"Cache Desync: Source has {idMap.Count} unique IDs, but Cache has {idIndexProp.arraySize}. Please 'Rebuild Cache'.";
+				_cacheValidationType = MessageType.Warning;
+				return;
+			}
+
+			_cacheValidationResult = $"Database Healthy. {idMap.Count} Unique IDs indexed.";
+			_cacheValidationType = MessageType.Info;
+		}
+
+		private void FixDuplicateIDs()
+		{
+			HashSet<string> seenIds = new HashSet<string>();
+			int fixedCount = 0;
+
+			foreach (var obj in _db.SOQueryEntities)
+			{
+				if (obj == null) continue;
+				if (obj is not ISOQueryEntity entity) continue;
+				if (string.IsNullOrEmpty(entity.Id)) continue;
+
+				if (seenIds.Contains(entity.Id))
+				{
+					// This is a duplicate (the latter one found)
+					// Generate new ID: OldID_RandomSuffix
+					string newId = $"{entity.Id}_{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}";
+
+					// Use SerializedObject to safely assign the new ID 
+					// (This works regardless of whether the setter is private)
+					SerializedObject so = new SerializedObject(obj);
+					SerializedProperty idProp = so.FindProperty("Id");
+					if (idProp == null) idProp = so.FindProperty("id");
+					if (idProp == null) idProp = so.FindProperty("_id");
+					if (idProp == null) idProp = so.FindProperty("<Id>k__BackingField"); // Auto-property backing field
+
+					if (idProp != null)
+					{
+						idProp.stringValue = newId;
+						so.ApplyModifiedProperties();
+						fixedCount++;
+						Debug.Log($"[SOQuery] Fixed duplicate on '{obj.name}'. ID changed from '{entity.Id}' to '{newId}'");
+					}
+					else
+					{
+						Debug.LogError($"[SOQuery] Could not auto-fix '{obj.name}'. Could not find SerializedProperty for 'Id'.");
+					}
+				}
+				else
+				{
+					seenIds.Add(entity.Id);
+				}
+			}
+
+			if (fixedCount > 0)
+			{
+				AssetDatabase.SaveAssets(); // Ensure changes are written to disk
+				SOQueryDatabaseProcessor.BuildCache(_db); // Rebuild cache with new IDs
+				RunCacheIntegrityCheck(); // Re-verify
+			}
+		}
+
+		// ==================================================================================
+		// QUERY AREA
 		// ==================================================================================
 
 		private void DrawSearchArea()
@@ -157,13 +311,11 @@ namespace NestedSO.SOEditor
 			}
 			else if (currentTags.Count > 0)
 			{
-				// Green Verified Label
 				EditorGUILayout.BeginHorizontal();
 				GUILayout.FlexibleSpace();
 
-				// FIXED: Use a safe standard icon
 				var icon = EditorGUIUtility.IconContent("TestPassed");
-				if (icon == null) icon = EditorGUIUtility.IconContent("Collab"); // Fallback
+				if (icon == null) icon = EditorGUIUtility.IconContent("Collab");
 
 				if (icon != null) GUILayout.Label(icon, GUILayout.Width(16), GUILayout.Height(14));
 
@@ -199,7 +351,6 @@ namespace NestedSO.SOEditor
 				_scrollPos = EditorGUILayout.BeginScrollView(_scrollPos, GUILayout.Height(400));
 				foreach (var item in pageResults)
 				{
-					// Check if this specific item is missing from cache
 					bool isMissingFromCache = !_cachedResultIDs.Contains(item.GetInstanceID());
 					DrawEntityLine(item, isMissingFromCache);
 				}
@@ -213,7 +364,6 @@ namespace NestedSO.SOEditor
 
 		private void ValidateCacheAgainstLive(List<string> tags, List<ScriptableObject> liveResults)
 		{
-			// If no tags, we aren't querying, so cache is irrelevant (unless empty)
 			if (tags == null || tags.Count == 0)
 			{
 				_isCacheStale = false;
@@ -221,7 +371,7 @@ namespace NestedSO.SOEditor
 				return;
 			}
 
-			// 1. Simulate Cache Lookup
+			// Simulate Cache Lookup
 			var tagIndexProp = serializedObject.FindProperty("_serializedTagIndex");
 			var queryCacheProp = serializedObject.FindProperty("_serializedQueryCache");
 
@@ -273,7 +423,6 @@ namespace NestedSO.SOEditor
 
 					if (!tagFound)
 					{
-						// Tag missing from cache completely -> Result is empty
 						cacheResultIDs = new HashSet<int>();
 						break;
 					}
@@ -286,7 +435,7 @@ namespace NestedSO.SOEditor
 			if (cacheResultIDs == null) cacheResultIDs = new HashSet<int>();
 			_cachedResultIDs = cacheResultIDs;
 
-			// 2. Compare
+			// Compare
 			int liveCount = liveResults.Count;
 			int cacheCount = cacheResultIDs.Count;
 
@@ -297,7 +446,6 @@ namespace NestedSO.SOEditor
 			}
 			else
 			{
-				// Deep compare IDs
 				bool mismatch = false;
 				foreach (var liveItem in liveResults)
 				{
@@ -327,14 +475,13 @@ namespace NestedSO.SOEditor
 			int instanceId = obj.GetInstanceID();
 			bool isExpanded = _expandedItems.Contains(instanceId);
 
-			// Change background color if missing from cache
 			if (missingFromCache && _isCacheStale)
 			{
-				GUI.backgroundColor = new Color(1f, 0.8f, 0.8f); // Light Red tint
+				GUI.backgroundColor = new Color(1f, 0.8f, 0.8f);
 			}
 
 			EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-			GUI.backgroundColor = Color.white; // Reset
+			GUI.backgroundColor = Color.white;
 
 			EditorGUILayout.BeginHorizontal();
 
@@ -372,7 +519,7 @@ namespace NestedSO.SOEditor
 		}
 
 		// ==================================================================================
-		// REST OF CLASS (Tags Explorer, Headers, Helpers - Unchanged)
+		// REST OF CLASS (Tags Explorer, Headers, Helpers)
 		// ==================================================================================
 
 		private void AnalyzeTags()
