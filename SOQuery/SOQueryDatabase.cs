@@ -9,26 +9,20 @@ namespace NestedSO
 	public class SOQueryDatabase : ScriptableObject, ISerializationCallbackReceiver
 	{
 		[Header("Configuration")]
-		[Tooltip("The raw list of objects to index.")]
 		public List<ScriptableObject> SOQueryEntities = new List<ScriptableObject>();
-
-		[Tooltip("Define queries here (e.g. 'Mission, Hard') to pre-calculate their results during the build step.")]
 		public List<string> PrewarmQueries = new List<string>();
 
-		// Cached Indexing (Optimized: Stores Indices instead of Object References)
-		[SerializeField]
-		private List<TagIndexEntry> _serializedTagIndex = new List<TagIndexEntry>();
+		[SerializeField, HideInInspector] private List<TagIndexEntry> _serializedTagIndex = new List<TagIndexEntry>();
+		[SerializeField, HideInInspector] private List<QueryCacheEntry> _serializedQueryCache = new List<QueryCacheEntry>();
+		[SerializeField, HideInInspector] private List<IdIndexEntry> _serializedIdIndex = new List<IdIndexEntry>();
 
-		[SerializeField]
-		private List<QueryCacheEntry> _serializedQueryCache = new List<QueryCacheEntry>();
+		private Dictionary<string, HashSet<ISOQueryEntity>> _runtimeTagIndex = new Dictionary<string, HashSet<ISOQueryEntity>>();
+		private Dictionary<string, List<ISOQueryEntity>> _runtimeQueryCache = new Dictionary<string, List<ISOQueryEntity>>();
+		private Dictionary<string, ISOQueryEntity> _runtimeIdIndex = new Dictionary<string, ISOQueryEntity>();
 
-		[SerializeField]
-		private List<IdIndexEntry> _serializedIdIndex = new List<IdIndexEntry>();
-
-		// Runtime Look-up Maps
-		private Dictionary<string, HashSet<ISOQueryEntity>> _runtimeTagIndex;
-		private Dictionary<string, List<ISOQueryEntity>> _runtimeQueryCache;
-		private Dictionary<string, ISOQueryEntity> _runtimeIdIndex;
+		private Dictionary<string, int> _tagLookup;
+		private Dictionary<string, int> _queryLookup;
+		private Dictionary<string, int> _idLookup;
 
 		private bool _isInitialized = false;
 
@@ -36,44 +30,25 @@ namespace NestedSO
 		{
 			if (_isInitialized) return;
 
-			_runtimeTagIndex = new Dictionary<string, HashSet<ISOQueryEntity>>(_serializedTagIndex.Count);
-			foreach (var entry in _serializedTagIndex)
+			_tagLookup = new Dictionary<string, int>(_serializedTagIndex.Count);
+			for (int i = 0; i < _serializedTagIndex.Count; i++)
 			{
-				var set = new HashSet<ISOQueryEntity>();
-				foreach (int index in entry.EntityIndices)
-				{
-					if (IsValidIndex(index))
-					{
-						if (SOQueryEntities[index] is ISOQueryEntity entity) set.Add(entity);
-					}
-				}
-				_runtimeTagIndex[entry.Tag] = set;
+				if (!_tagLookup.ContainsKey(_serializedTagIndex[i].Tag))
+					_tagLookup[_serializedTagIndex[i].Tag] = i;
 			}
 
-			_runtimeQueryCache = new Dictionary<string, List<ISOQueryEntity>>(_serializedQueryCache.Count);
-			foreach (var entry in _serializedQueryCache)
+			_queryLookup = new Dictionary<string, int>(_serializedQueryCache.Count);
+			for (int i = 0; i < _serializedQueryCache.Count; i++)
 			{
-				var list = new List<ISOQueryEntity>();
-				foreach (int index in entry.ResultIndices)
-				{
-					if (IsValidIndex(index))
-					{
-						if (SOQueryEntities[index] is ISOQueryEntity entity) list.Add(entity);
-					}
-				}
-				_runtimeQueryCache[entry.QueryKey] = list;
+				if (!_queryLookup.ContainsKey(_serializedQueryCache[i].QueryKey))
+					_queryLookup[_serializedQueryCache[i].QueryKey] = i;
 			}
 
-			_runtimeIdIndex = new Dictionary<string, ISOQueryEntity>(_serializedIdIndex.Count);
-			foreach (var entry in _serializedIdIndex)
+			_idLookup = new Dictionary<string, int>(_serializedIdIndex.Count);
+			for (int i = 0; i < _serializedIdIndex.Count; i++)
 			{
-				if (IsValidIndex(entry.EntityIndex))
-				{
-					if (SOQueryEntities[entry.EntityIndex] is ISOQueryEntity isoEntity)
-					{
-						_runtimeIdIndex[entry.Id] = isoEntity;
-					}
-				}
+				if (!_idLookup.ContainsKey(_serializedIdIndex[i].Id))
+					_idLookup[_serializedIdIndex[i].Id] = i;
 			}
 
 			_isInitialized = true;
@@ -83,35 +58,51 @@ namespace NestedSO
 		{
 			if (_isInitialized)
 			{
-				_runtimeTagIndex?.Clear();
-				_runtimeQueryCache?.Clear();
-				_runtimeIdIndex?.Clear();
+				Unload();
+				_tagLookup = null;
+				_queryLookup = null;
+				_idLookup = null;
 				_isInitialized = false;
 			}
 		}
 
-		private bool IsValidIndex(int index)
+		public void Unload()
 		{
-			return index >= 0 && index < SOQueryEntities.Count && SOQueryEntities[index] != null;
+			if (_isInitialized)
+			{
+				_runtimeTagIndex.Clear();
+				_runtimeQueryCache.Clear();
+				_runtimeIdIndex.Clear();
+			}
 		}
 
 		public T Get<T>(string id) where T : ScriptableObject, ISOQueryEntity
 		{
 			EnsureInitialized();
+
 			if (_runtimeIdIndex.TryGetValue(id, out var entity)) return entity as T;
+
+			if (_idLookup.TryGetValue(id, out int index))
+			{
+				var entry = _serializedIdIndex[index];
+				if (IsValidIndex(entry.EntityIndex))
+				{
+					entity = SOQueryEntities[entry.EntityIndex] as ISOQueryEntity;
+					if (entity != null)
+					{
+						_runtimeIdIndex[id] = entity;
+						return entity as T;
+					}
+				}
+			}
+
 			return null;
 		}
 
 		public bool TryGet<T>(string id, out T value) where T : ScriptableObject, ISOQueryEntity
 		{
-			EnsureInitialized();
-			if (_runtimeIdIndex.TryGetValue(id, out var entity))
-			{
-				value = entity as T;
-				return true;
-			}
-			value = default;
-			return false;
+			value = Get<T>(id);
+			return value != null;
 		}
 
 		public List<T> Find<T>(params string[] tags) where T : ScriptableObject, ISOQueryEntity
@@ -119,24 +110,31 @@ namespace NestedSO
 			EnsureInitialized();
 
 			var searchTags = new List<string>(tags);
-			if (typeof(T) != typeof(ISOQueryEntity))
-			{
-				searchTags.Add(typeof(T).Name);
-			}
+			if (typeof(T) != typeof(ISOQueryEntity)) searchTags.Add(typeof(T).Name);
 			searchTags.Sort();
 			string cacheKey = string.Join("|", searchTags);
 
 			if (_runtimeQueryCache.TryGetValue(cacheKey, out List<ISOQueryEntity> cachedResult))
 			{
-				if (typeof(T) == typeof(ISOQueryEntity)) return cachedResult as List<T>;
-				return cachedResult.Cast<T>().ToList();
+				return CastResult<T>(cachedResult);
+			}
+
+			if (_queryLookup.TryGetValue(cacheKey, out int queryIndex))
+			{
+				var entry = _serializedQueryCache[queryIndex];
+				var results = ResolveIndices(entry.ResultIndices);
+
+				_runtimeQueryCache[cacheKey] = results;
+				return CastResult<T>(results);
 			}
 
 			HashSet<ISOQueryEntity> resultSet = null;
 
 			foreach (var tag in searchTags)
 			{
-				if (!_runtimeTagIndex.TryGetValue(tag, out var entitiesWithTag))
+				var entitiesWithTag = GetOrLoadTagSet(tag);
+
+				if (entitiesWithTag == null || entitiesWithTag.Count == 0)
 				{
 					resultSet = null;
 					break;
@@ -150,7 +148,7 @@ namespace NestedSO
 
 			_runtimeQueryCache[cacheKey] = finalResult;
 
-			return finalResult.Cast<T>().ToList();
+			return CastResult<T>(finalResult);
 		}
 
 		public T FindFirst<T>(params string[] tags) where T : ScriptableObject, ISOQueryEntity
@@ -159,167 +157,87 @@ namespace NestedSO
 			return results.Count > 0 ? results[0] : null;
 		}
 
-		// =================================================================================================
-		// INDEX BUILDING (Editor / Build Time)
-		// =================================================================================================
-
-		public void RebuildIndex()
+		private HashSet<ISOQueryEntity> GetOrLoadTagSet(string tag)
 		{
-			_serializedTagIndex.Clear();
-			_serializedQueryCache.Clear();
-			_serializedIdIndex.Clear();
+			if (_runtimeTagIndex.TryGetValue(tag, out var set)) return set;
 
-			// 1. Create Lookup: Object -> Index
-			var entityToIndex = new Dictionary<ScriptableObject, int>();
-			for (int i = 0; i < SOQueryEntities.Count; i++)
+			if (_tagLookup.TryGetValue(tag, out int index))
 			{
-				if (SOQueryEntities[i] != null) entityToIndex[SOQueryEntities[i]] = i;
-			}
+				var entry = _serializedTagIndex[index];
 
-			var tempTagMap = new Dictionary<string, List<int>>();
-			var tempIdMap = new Dictionary<string, int>();
-
-			for (int i = 0; i < SOQueryEntities.Count; i++)
-			{
-				var obj = SOQueryEntities[i];
-				if (obj == null) continue;
-				if (obj is not ISOQueryEntity entity) continue;
-
-				// ID Indexing
-				if (!string.IsNullOrEmpty(entity.Id))
+				set = new HashSet<ISOQueryEntity>();
+				foreach (int entityIndex in entry.EntityIndices)
 				{
-					if (!tempIdMap.ContainsKey(entity.Id))
+					if (IsValidIndex(entityIndex))
 					{
-						tempIdMap[entity.Id] = i;
-						_serializedIdIndex.Add(new IdIndexEntry { Id = entity.Id, EntityIndex = i });
-					}
-					else
-					{
-						Debug.LogWarning($"[SOQueryDatabase] Duplicate ID found: {entity.Id} on {obj.name}. Skipping.");
+						if (SOQueryEntities[entityIndex] is ISOQueryEntity entity)
+							set.Add(entity);
 					}
 				}
 
-				// Tag Indexing
-				foreach (var tag in GetSearchableTags(obj))
-				{
-					if (!tempTagMap.ContainsKey(tag)) tempTagMap[tag] = new List<int>();
-					tempTagMap[tag].Add(i);
-				}
+				_runtimeTagIndex[tag] = set;
+				return set;
 			}
 
-			foreach (var kvp in tempTagMap)
-			{
-				_serializedTagIndex.Add(new TagIndexEntry { Tag = kvp.Key, EntityIndices = kvp.Value });
-			}
-
-			foreach (var queryStr in PrewarmQueries)
-			{
-				var tags = ParseTags(queryStr, sort: true);
-				if (tags.Count == 0) continue;
-
-				string key = string.Join("|", tags);
-
-				List<int> resultIndices = null;
-
-				foreach (var tag in tags)
-				{
-					if (!tempTagMap.TryGetValue(tag, out var currentIndices))
-					{
-						resultIndices = new List<int>();
-						break;
-					}
-
-					if (resultIndices == null) resultIndices = new List<int>(currentIndices);
-					else resultIndices = resultIndices.Intersect(currentIndices).ToList();
-				}
-
-				if (resultIndices == null) resultIndices = new List<int>();
-
-				_serializedQueryCache.Add(new QueryCacheEntry { QueryKey = key, ResultIndices = resultIndices });
-			}
-
-#if UNITY_EDITOR
-			UnityEditor.EditorUtility.SetDirty(this);
-#endif
-			Debug.Log($"[SOQueryDatabase] Rebuilt Index (Optimized). Tags: {_serializedTagIndex.Count}, IDs: {_serializedIdIndex.Count}, Cached Queries: {_serializedQueryCache.Count}");
+			return null;
 		}
 
-		// =================================================================================================
-		// HELPERS
-		// =================================================================================================
-
-		private void EnsureInitialized()
+		private List<ISOQueryEntity> ResolveIndices(List<int> indices)
 		{
-			if (!_isInitialized) Initialize();
+			var list = new List<ISOQueryEntity>(indices.Count);
+			foreach (int index in indices)
+			{
+				if (IsValidIndex(index))
+				{
+					if (SOQueryEntities[index] is ISOQueryEntity entity)
+						list.Add(entity);
+				}
+			}
+			return list;
 		}
+
+		private bool IsValidIndex(int index)
+		{
+			return index >= 0 && index < SOQueryEntities.Count && SOQueryEntities[index] != null;
+		}
+
+		private List<T> CastResult<T>(List<ISOQueryEntity> list) where T : ScriptableObject, ISOQueryEntity
+		{
+			if (typeof(T) == typeof(ISOQueryEntity)) return list as List<T>;
+			return list.Cast<T>().ToList();
+		}
+
+		private void EnsureInitialized() { if (!_isInitialized) Initialize(); }
 
 		public static IEnumerable<string> GetSearchableTags(ScriptableObject obj)
 		{
-			if (obj is ISOQueryEntity entity)
-			{
-				foreach (var t in entity.Tags) yield return t;
-			}
-
+			if (obj is ISOQueryEntity entity) foreach (var t in entity.Tags) yield return t;
 			Type currentType = obj.GetType();
 			while (currentType != null && currentType != typeof(ScriptableObject))
 			{
-				if (!IsTypeExcluded(currentType))
-				{
-					yield return currentType.Name;
-				}
+				if (!IsTypeExcluded(currentType)) yield return currentType.Name;
 				currentType = currentType.BaseType;
 			}
 		}
 
-		public static bool IsTypeExcluded(Type t)
-		{
-			return t.IsDefined(typeof(SOQueryExcludeTypeAttribute), false) || t.IsGenericType;
-		}
+		public static bool IsTypeExcluded(Type t) => t.IsDefined(typeof(SOQueryExcludeTypeAttribute), false) || t.IsAbstract;
 
 		public static List<string> ParseTags(string input, bool sort = false)
 		{
 			if (string.IsNullOrWhiteSpace(input)) return new List<string>();
-			var result = input.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
-							  .Select(t => t.Trim())
-							  .ToList();
+			var result = input.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(t => t.Trim()).ToList();
 			if (sort) result.Sort();
 			return result;
 		}
 
-		// =================================================================================================
-		// DATA STRUCTURES
-		// =================================================================================================
-
 		[System.Serializable]
-		private struct TagIndexEntry
-		{
-			public string Tag;
-			public List<int> EntityIndices;
-		}
-
+		private struct TagIndexEntry { public string Tag; public List<int> EntityIndices; }
 		[System.Serializable]
-		private struct QueryCacheEntry
-		{
-			public string QueryKey;
-			public List<int> ResultIndices;
-		}
-
+		private struct QueryCacheEntry { public string QueryKey; public List<int> ResultIndices; }
 		[System.Serializable]
-		private struct IdIndexEntry
-		{
-			public string Id;
-			public int EntityIndex;
-		}
+		private struct IdIndexEntry { public string Id; public int EntityIndex; }
 
-		// =================================================================================================
-		// UNITY CALLBACKS
-		// =================================================================================================
-
-		public void OnBeforeSerialize() { /* No action needed */ }
-
-		public void OnAfterDeserialize()
-		{
-			Deinitialize();
-		}
+		public void OnBeforeSerialize() { }
+		public void OnAfterDeserialize() { Deinitialize(); }
 	}
 }
