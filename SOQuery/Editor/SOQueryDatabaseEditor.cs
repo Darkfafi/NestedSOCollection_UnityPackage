@@ -14,31 +14,62 @@ namespace NestedSO.SOEditor
 	{
 		private SOQueryDatabase _db;
 
-		// Search & Pagination State
+		// --- Search & Pagination ---
 		private string _searchString = "";
 		private Vector2 _scrollPos;
 		private bool _showConfigs = true;
 
-		// Tags Explorer State
+		// --- Tags Explorer State ---
 		private bool _showTagExplorer = false;
 		private string _explorerSearchString = "";
 		private Vector2 _explorerScrollPos;
-		private Dictionary<string, int> _cachedTagCounts;
-		private List<KeyValuePair<string, int>> _sortedTags;
 
-		// Expansion State
+		// Data Structures for Analysis
+		private class TagStats
+		{
+			public bool IsContainer;
+			public int TypeCount;
+			public int EditorCount;
+			public int RuntimeCount;
+
+			public int TotalCount => TypeCount + EditorCount + RuntimeCount;
+		}
+		private Dictionary<string, TagStats> _tagStats = new Dictionary<string, TagStats>();
+		private List<string> _sortedTags = new List<string>();
+
+		// Filter State
+		[System.Flags]
+		public enum TagSourceFilter
+		{
+			Type = 1 << 0,
+			Container = 1 << 1,
+			Editor = 1 << 2,
+			Runtime = 1 << 3
+		}
+		private TagSourceFilter _explorerFilter = (TagSourceFilter)~0; // Default: All checked
+
+		// --- Expansion State ---
 		private HashSet<int> _expandedItems = new HashSet<int>();
 
-		// Pagination
+		// --- Pagination ---
 		private int _currentPage = 0;
 		private const int ITEMS_PER_PAGE = 20;
 
-		// Cached Styles
+		// --- Cached Styles ---
 		private GUIStyle _tagPillStyle;
 		private GUIStyle _resultTagButtonStyle;
 		private GUIStyle _typeButtonStyle;
-		private GUIStyle _explorerCountStyle;
 		private GUIStyle _expandedBoxStyle;
+
+		// Search Bar Styles
+		private GUIStyle _toolbarSearchField;
+		private GUIStyle _toolbarCancelButton;
+
+		// Badge Styles
+		private GUIStyle _badgeContainer;
+		private GUIStyle _badgeType;
+		private GUIStyle _badgeEditor;
+		private GUIStyle _badgeRuntime;
 
 		private void OnEnable()
 		{
@@ -49,7 +80,7 @@ namespace NestedSO.SOEditor
 		public override void OnInspectorGUI()
 		{
 			serializedObject.Update();
-			InitializeStyles();
+			InitializeStyles(); // <--- Now fully safe
 
 			EditorGUILayout.Space(10);
 			DrawEditorHeader();
@@ -75,37 +106,73 @@ namespace NestedSO.SOEditor
 			serializedObject.ApplyModifiedProperties();
 		}
 
-		// --- TAGS EXPLORER LOGIC ---
+		// ==================================================================================
+		// TAGS EXPLORER (Corrected Styles)
+		// ==================================================================================
 
 		private void AnalyzeTags()
 		{
-			_cachedTagCounts = new Dictionary<string, int>();
+			_tagStats.Clear();
+
+			// Mark Container Tags
+			foreach (var tag in GetConstantTags())
+			{
+				GetOrAddStats(tag).IsContainer = true;
+			}
+
 			if (_db.SOQueryEntities == null) return;
 
 			foreach (var obj in _db.SOQueryEntities)
 			{
-				if (obj is not ISOQueryEntity entity) continue;
+				if (obj == null) continue;
 
-				// 1. Manual Tags
-				foreach (var t in entity.Tags) IncrementTagCount(t);
-
+				// Type Tags
 				Type tType = obj.GetType();
 				while (tType != null && tType != typeof(ScriptableObject))
 				{
 					if (!SOQuery.IsTypeExcluded(tType))
 					{
-						IncrementTagCount(tType.Name);
+						GetOrAddStats(tType.Name).TypeCount++;
 					}
 					tType = tType.BaseType;
 				}
+
+				// Instance Tags (Distinguish Editor vs Runtime)
+				if (obj is ISOQueryEntity entity)
+				{
+					if (entity.Tags is SOQueryTags soTags)
+					{
+						// Editor Tags
+						var editorList = GetPrivateField<List<string>>(soTags, "_tags") ?? new List<string>();
+						foreach (var t in editorList) GetOrAddStats(t).EditorCount++;
+
+						// Runtime Tags
+						var runtimeSet = GetPrivateProperty<IEnumerable<string>>(soTags, "RuntimeTags") ??
+										 GetPrivateField<HashSet<string>>(soTags, "_runtimeTags");
+
+						if (runtimeSet != null)
+						{
+							foreach (var t in runtimeSet) GetOrAddStats(t).RuntimeCount++;
+						}
+					}
+					else
+					{
+						foreach (var t in entity.Tags) GetOrAddStats(t).EditorCount++;
+					}
+				}
 			}
-			_sortedTags = _cachedTagCounts.OrderByDescending(x => x.Value).ThenBy(x => x.Key).ToList();
+
+			_sortedTags = _tagStats.Keys.OrderByDescending(k => _tagStats[k].TotalCount).ThenBy(k => k).ToList();
 		}
 
-		private void IncrementTagCount(string tag)
+		private TagStats GetOrAddStats(string tag)
 		{
-			if (!_cachedTagCounts.ContainsKey(tag)) _cachedTagCounts[tag] = 0;
-			_cachedTagCounts[tag]++;
+			if (!_tagStats.TryGetValue(tag, out var stats))
+			{
+				stats = new TagStats();
+				_tagStats[tag] = stats;
+			}
+			return stats;
 		}
 
 		private void DrawTagsExplorer()
@@ -115,40 +182,71 @@ namespace NestedSO.SOEditor
 
 			EditorGUILayout.BeginVertical("box");
 
-			EditorGUILayout.BeginHorizontal();
-			_explorerSearchString = EditorGUILayout.TextField(_explorerSearchString);
-			if (GUILayout.Button("x", GUILayout.Width(20))) _explorerSearchString = "";
+			// --- Safe Search Bar ---
+			EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+
+			// Search Field
+			EditorGUI.BeginChangeCheck();
+			_explorerSearchString = EditorGUILayout.TextField(_explorerSearchString, _toolbarSearchField, GUILayout.ExpandWidth(true));
+			EditorGUI.EndChangeCheck();
+
+			// Cancel Button
+			if (!string.IsNullOrEmpty(_explorerSearchString))
+			{
+				if (GUILayout.Button(GUIContent.none, _toolbarCancelButton))
+				{
+					_explorerSearchString = "";
+					GUI.FocusControl(null);
+				}
+			}
+
+			EditorGUILayout.Space(10);
+
+			// Filter Dropdown
+			_explorerFilter = (TagSourceFilter)EditorGUILayout.EnumFlagsField(_explorerFilter, EditorStyles.toolbarDropDown, GUILayout.Width(100));
+
 			EditorGUILayout.EndHorizontal();
 
 			EditorGUILayout.Space(2);
 
-			// Filter the view based on search string
-			var visibleTags = _sortedTags;
-			if (!string.IsNullOrEmpty(_explorerSearchString))
+			// --- Filter Logic ---
+			var visibleTags = _sortedTags.Where(tag =>
 			{
-				visibleTags = _sortedTags
-					.Where(x => x.Key.IndexOf(_explorerSearchString, StringComparison.OrdinalIgnoreCase) >= 0)
-					.ToList();
-			}
+				var stats = _tagStats[tag];
 
-			// Stats Header
-			EditorGUILayout.LabelField($"Found {visibleTags?.Count ?? 0} matching tags", EditorStyles.miniLabel);
+				// Text Search
+				if (!string.IsNullOrEmpty(_explorerSearchString))
+				{
+					if (tag.IndexOf(_explorerSearchString, StringComparison.OrdinalIgnoreCase) < 0) return false;
+				}
 
-			if (visibleTags != null && visibleTags.Count > 0)
+				// Source Filter
+				bool matches = false;
+				if ((_explorerFilter & TagSourceFilter.Container) != 0 && stats.IsContainer) matches = true;
+				if ((_explorerFilter & TagSourceFilter.Type) != 0 && stats.TypeCount > 0) matches = true;
+				if ((_explorerFilter & TagSourceFilter.Editor) != 0 && stats.EditorCount > 0) matches = true;
+				if ((_explorerFilter & TagSourceFilter.Runtime) != 0 && stats.RuntimeCount > 0) matches = true;
+
+				return matches;
+			}).ToList();
+
+			EditorGUILayout.LabelField($"Found {visibleTags.Count} matching tags", EditorStyles.miniLabel);
+
+			if (visibleTags.Count > 0)
 			{
 				float height = Mathf.Min(250, visibleTags.Count * 22 + 10);
 				_explorerScrollPos = EditorGUILayout.BeginScrollView(_explorerScrollPos, GUILayout.Height(height));
 
-				foreach (var kvp in visibleTags)
+				foreach (var tag in visibleTags)
 				{
-					DrawTagExplorerRow(kvp.Key, kvp.Value);
+					DrawTagExplorerRow(tag, _tagStats[tag]);
 				}
 
 				EditorGUILayout.EndScrollView();
 			}
 			else
 			{
-				EditorGUILayout.HelpBox("No tags found.", MessageType.Info);
+				EditorGUILayout.HelpBox("No tags match filters.", MessageType.Info);
 			}
 
 			if (GUILayout.Button("Refresh Stats", EditorStyles.miniButton)) AnalyzeTags();
@@ -156,58 +254,67 @@ namespace NestedSO.SOEditor
 			EditorGUILayout.EndVertical();
 		}
 
-		private void DrawTagExplorerRow(string tag, int count)
+		private void DrawTagExplorerRow(string tag, TagStats stats)
 		{
 			EditorGUILayout.BeginHorizontal();
+
+			// Tag Name Button
 			if (GUILayout.Button(tag, _resultTagButtonStyle, GUILayout.Height(18))) AddTag(tag);
+
 			GUILayout.FlexibleSpace();
-			GUILayout.Label($"{count}", _explorerCountStyle, GUILayout.Width(40));
+
+			// --- Badges (R, E, C, T) ---
+
+			// R (Runtime) - Orange
+			if (stats.RuntimeCount > 0)
+				GUILayout.Label(new GUIContent($"R ({stats.RuntimeCount})", "Runtime Dynamic Usage"), _badgeRuntime, GUILayout.Width(40));
+
+			// E (Editor) - Grey
+			if (stats.EditorCount > 0)
+				GUILayout.Label(new GUIContent($"E ({stats.EditorCount})", "Editor Serialized Usage"), _badgeEditor, GUILayout.Width(40));
+
+			// T (Type) - Blue
+			if (stats.TypeCount > 0)
+				GUILayout.Label(new GUIContent($"T ({stats.TypeCount})", "Class Type Usage"), _badgeType, GUILayout.Width(40));
+
+			// C (Container) - Green
+			// Containers usually don't have a "count" of definitions, it's just a boolean flag of existence
+			if (stats.IsContainer)
+				GUILayout.Label(new GUIContent("C", "Defined in Code Container"), _badgeContainer, GUILayout.Width(20));
+
 			EditorGUILayout.EndHorizontal();
 		}
 
-		private void DrawEditorHeader()
-		{
-			EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-			EditorGUILayout.LabelField($"Database Contains {_db.SOQueryEntities.Count} Entities", EditorStyles.boldLabel);
-			long totalSize = CalculateTotalSize(_db.SOQueryEntities);
-			EditorGUILayout.LabelField($"Total Memory: {FormatBytes(totalSize)}", EditorStyles.miniLabel);
-			EditorGUILayout.EndVertical();
-		}
+		// ==================================================================================
+		// QUERY AREA & REST (Standard)
+		// ==================================================================================
 
-		// --- UPDATED SEARCH AREA ---
 		private void DrawSearchArea()
 		{
 			EditorGUILayout.LabelField("Query Playground", EditorStyles.boldLabel);
 			EditorGUILayout.BeginVertical("box");
 
-			// 1. Active Filters
 			EditorGUILayout.BeginHorizontal();
-			var currentTags = _searchString.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
-										   .Select(s => s.Trim()).ToList();
-
+			var currentTags = SOQuery.ParseTags(_searchString);
 			foreach (var tag in currentTags.ToList())
 			{
 				if (GUILayout.Button($"{tag}  ×", _tagPillStyle, GUILayout.Height(20))) RemoveTag(tag);
 			}
-
 			GUILayout.FlexibleSpace();
 
-			Color originalColor = GUI.backgroundColor;
-			GUI.backgroundColor = new Color(0.7f, 1f, 0.7f);
+			Color c = GUI.backgroundColor; GUI.backgroundColor = new Color(0.7f, 1f, 0.7f);
 			if (GUILayout.Button("+ Add Filter", GUILayout.Width(100), GUILayout.Height(20))) ShowAddFilterDropdown();
-			GUI.backgroundColor = originalColor;
+			GUI.backgroundColor = c;
+
 			EditorGUILayout.EndHorizontal();
 
-			// 2. Filter Logic
 			var allResults = FilterList(currentTags);
 			int totalCount = allResults.Count;
 
-			// 3. Pagination
 			int totalPages = Mathf.CeilToInt((float)totalCount / ITEMS_PER_PAGE);
 			if (_currentPage >= totalPages) _currentPage = Mathf.Max(0, totalPages - 1);
 			var pageResults = allResults.Skip(_currentPage * ITEMS_PER_PAGE).Take(ITEMS_PER_PAGE).ToList();
 
-			// 4. Stats
 			EditorGUILayout.Space(5);
 			EditorGUILayout.BeginHorizontal();
 			long subsetSize = CalculateTotalSize(allResults);
@@ -223,21 +330,14 @@ namespace NestedSO.SOEditor
 			}
 			EditorGUILayout.EndHorizontal();
 
-			// 5. Result List (Dynamic Height)
 			_showConfigs = EditorGUILayout.Foldout(_showConfigs, "Results Preview", true);
 			if (_showConfigs)
 			{
 				_scrollPos = EditorGUILayout.BeginScrollView(_scrollPos, GUILayout.Height(400));
-
-				foreach (var item in pageResults)
-				{
-					DrawEntityLine(item);
-				}
-
+				foreach (var item in pageResults) DrawEntityLine(item);
 				if (pageResults.Count == 0) EditorGUILayout.HelpBox("No items match your filter.", MessageType.Info);
 				EditorGUILayout.EndScrollView();
 			}
-
 			EditorGUILayout.EndVertical();
 		}
 
@@ -248,19 +348,11 @@ namespace NestedSO.SOEditor
 			bool isExpanded = _expandedItems.Contains(instanceId);
 
 			EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-			// --- Top Row (Summary) ---
 			EditorGUILayout.BeginHorizontal();
 
-			// 1. Foldout Arrow
 			bool newExpanded = EditorGUILayout.Foldout(isExpanded, GUIContent.none, true);
-			if (newExpanded != isExpanded)
-			{
-				if (newExpanded) _expandedItems.Add(instanceId);
-				else _expandedItems.Remove(instanceId);
-			}
+			if (newExpanded != isExpanded) { if (newExpanded) _expandedItems.Add(instanceId); else _expandedItems.Remove(instanceId); }
 
-			// 2. Object Field
 			using (new EditorGUI.DisabledScope(true))
 			{
 				EditorGUILayout.ObjectField(obj, typeof(ScriptableObject), false, GUILayout.Width(180));
@@ -268,20 +360,16 @@ namespace NestedSO.SOEditor
 
 			if (obj is ISOQueryEntity entity)
 			{
-				// 3. Size
 				long size = Profiler.GetRuntimeMemorySizeLong(obj);
 				EditorGUILayout.LabelField(FormatBytes(size), EditorStyles.miniLabel, GUILayout.Width(45));
 
-				// 4. Preview Tags 
 				if (!newExpanded)
 				{
 					Type t = obj.GetType();
-
 					if (!SOQuery.IsTypeExcluded(t))
 					{
 						if (GUILayout.Button(t.Name, _typeButtonStyle)) AddTag(t.Name);
 					}
-
 					foreach (var tag in entity.Tags.Take(4))
 					{
 						if (GUILayout.Button(tag, _resultTagButtonStyle)) AddTag(tag);
@@ -292,108 +380,120 @@ namespace NestedSO.SOEditor
 			GUILayout.FlexibleSpace();
 			EditorGUILayout.EndHorizontal();
 
-			// --- Expanded Detail View ---
-			if (newExpanded && obj is ISOQueryEntity expandedEntity)
-			{
-				DrawExpandedDetails(obj, expandedEntity);
-			}
-
+			if (newExpanded && obj is ISOQueryEntity expandedEntity) DrawExpandedDetails(obj, expandedEntity);
 			EditorGUILayout.EndVertical();
 		}
 
 		private void DrawExpandedDetails(ScriptableObject obj, ISOQueryEntity entity)
 		{
-			var allTags = new List<string>();
-
-			Type t = obj.GetType();
-			while (t != null && t != typeof(ScriptableObject))
-			{
-				if (!SOQuery.IsTypeExcluded(t))
-				{
-					allTags.Add(t.Name);
-				}
-				t = t.BaseType;
-			}
-			allTags.AddRange(entity.Tags);
-
-			// Draw Container
+			var allTags = SOQuery.GetSearchableTags(obj).ToList();
 			EditorGUILayout.BeginVertical(_expandedBoxStyle);
-
 			EditorGUILayout.LabelField("All Searchable Tags:", EditorStyles.miniBoldLabel);
 
 			float width = EditorGUIUtility.currentViewWidth - 60;
 			float currentX = 0;
-
 			EditorGUILayout.BeginHorizontal();
 			foreach (var tag in allTags)
 			{
-				// Decide Style (Type vs Manual)
-				bool isType = !entity.Tags.Contains(tag);
-				GUIStyle style = isType ? _typeButtonStyle : _resultTagButtonStyle;
-
+				bool isManual = entity.Tags.Contains(tag);
+				GUIStyle style = isManual ? _resultTagButtonStyle : _typeButtonStyle;
 				float btnWidth = style.CalcSize(new GUIContent(tag)).x;
 
-				// Wrap
-				if (currentX + btnWidth > width)
-				{
-					currentX = 0;
-					EditorGUILayout.EndHorizontal();
-					EditorGUILayout.BeginHorizontal();
-				}
-
+				if (currentX + btnWidth > width) { currentX = 0; EditorGUILayout.EndHorizontal(); EditorGUILayout.BeginHorizontal(); }
 				if (GUILayout.Button(tag, style)) AddTag(tag);
-
 				currentX += btnWidth + 4;
 			}
 			EditorGUILayout.EndHorizontal();
-
 			EditorGUILayout.EndVertical();
 		}
 
-		// --- Helpers ---
+		// ==================================================================================
+		// HELPERS (Including Safe Style Init)
+		// ==================================================================================
+
+		private T GetPrivateField<T>(object target, string fieldName) where T : class
+		{
+			var field = target.GetType().GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
+			if (field != null) return field.GetValue(target) as T;
+			return null;
+		}
+
+		private T GetPrivateProperty<T>(object target, string propName) where T : class
+		{
+			var prop = target.GetType().GetProperty(propName, BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
+			if (prop != null) return prop.GetValue(target) as T;
+			return null;
+		}
 
 		private void InitializeStyles()
 		{
 			if (_tagPillStyle == null)
-			{
 				_tagPillStyle = new GUIStyle("HelpBox") { fontSize = 11, alignment = TextAnchor.MiddleLeft, padding = new RectOffset(6, 20, 3, 3), margin = new RectOffset(0, 5, 0, 0) };
-			}
+
 			if (_resultTagButtonStyle == null)
-			{
 				_resultTagButtonStyle = new GUIStyle("minibutton") { fontSize = 10, alignment = TextAnchor.MiddleCenter, margin = new RectOffset(2, 2, 2, 2), fixedHeight = 18 };
-			}
+
 			if (_typeButtonStyle == null)
-			{
 				_typeButtonStyle = new GUIStyle("minibutton") { fontSize = 11, fontStyle = FontStyle.Bold, fixedHeight = 18, normal = { textColor = EditorGUIUtility.isProSkin ? new Color(0.4f, 0.7f, 1f) : new Color(0.1f, 0.3f, 0.8f) } };
-			}
-			if (_explorerCountStyle == null)
-			{
-				_explorerCountStyle = new GUIStyle(EditorStyles.label) { alignment = TextAnchor.MiddleRight, fontSize = 10, normal = { textColor = Color.gray } };
-			}
+
 			if (_expandedBoxStyle == null)
-			{
 				_expandedBoxStyle = new GUIStyle("CN Box") { padding = new RectOffset(10, 10, 5, 5), margin = new RectOffset(5, 5, 0, 5) };
+
+			// --- Badges ---
+			if (_badgeContainer == null)
+			{
+				_badgeContainer = new GUIStyle("CN CountBadge") { alignment = TextAnchor.MiddleCenter, fontSize = 9, fixedHeight = 16 };
+				_badgeContainer.normal.textColor = EditorGUIUtility.isProSkin ? new Color(0.7f, 1f, 0.7f) : new Color(0.1f, 0.4f, 0.1f);
+			}
+			if (_badgeType == null)
+			{
+				_badgeType = new GUIStyle("CN CountBadge") { alignment = TextAnchor.MiddleCenter, fontSize = 9, fixedHeight = 16 };
+				_badgeType.normal.textColor = EditorGUIUtility.isProSkin ? new Color(0.6f, 0.8f, 1f) : new Color(0.1f, 0.3f, 0.8f);
+			}
+			if (_badgeEditor == null)
+			{
+				_badgeEditor = new GUIStyle("CN CountBadge") { alignment = TextAnchor.MiddleCenter, fontSize = 9, fixedHeight = 16 };
+			}
+			if (_badgeRuntime == null)
+			{
+				_badgeRuntime = new GUIStyle("CN CountBadge") { alignment = TextAnchor.MiddleCenter, fontSize = 9, fixedHeight = 16 };
+				_badgeRuntime.normal.textColor = EditorGUIUtility.isProSkin ? new Color(1f, 0.8f, 0.4f) : new Color(0.8f, 0.5f, 0.1f);
+			}
+
+			if (_toolbarSearchField == null)
+			{
+				// Try to find the internal one (most rounded)
+				_toolbarSearchField = GUI.skin.FindStyle("ToolbarSeachTextField");
+				if (_toolbarSearchField == null) _toolbarSearchField = GUI.skin.FindStyle("ToolbarSearchTextField");
+				if (_toolbarSearchField == null) _toolbarSearchField = EditorStyles.toolbarTextField;
+			}
+
+			if (_toolbarCancelButton == null)
+			{
+				_toolbarCancelButton = GUI.skin.FindStyle("ToolbarSeachCancelButton");
+				if (_toolbarCancelButton == null) _toolbarCancelButton = GUI.skin.FindStyle("ToolbarSearchCancelButton");
+				if (_toolbarCancelButton == null) _toolbarCancelButton = GUIStyle.none;
 			}
 		}
 
-		// --- Standard Logic (Filtering, Adding Tags, etc.) ---
+		private void DrawEditorHeader()
+		{
+			EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+			EditorGUILayout.LabelField($"Database Contains {_db.SOQueryEntities.Count} Entities", EditorStyles.boldLabel);
+			long totalSize = CalculateTotalSize(_db.SOQueryEntities);
+			EditorGUILayout.LabelField($"Total Memory: {FormatBytes(totalSize)}", EditorStyles.miniLabel);
+			EditorGUILayout.EndVertical();
+		}
+
+		// --- Shared Logic ---
 
 		public static HashSet<string> GetSOQueryEntityTags(SOQueryDatabase db)
 		{
 			HashSet<string> returnValue = new HashSet<string>();
 			foreach (var obj in db.SOQueryEntities)
 			{
-				if (obj is not ISOQueryEntity entity) continue;
-				foreach (var t in entity.Tags) returnValue.Add(t);
-				Type tType = obj.GetType();
-				while (tType != null && tType != typeof(ScriptableObject))
-				{
-					if (!SOQuery.IsTypeExcluded(tType))
-					{
-						returnValue.Add(tType.Name);
-					}
-					tType = tType.BaseType;
-				}
+				if (obj == null) continue;
+				foreach (var tag in SOQuery.GetSearchableTags(obj)) returnValue.Add(tag);
 			}
 			foreach (var tag in GetConstantTags()) returnValue.Add(tag);
 			return returnValue;
@@ -425,11 +525,12 @@ namespace NestedSO.SOEditor
 
 		private void AddTag(string newTag)
 		{
-			var tags = _searchString.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).ToList();
-			if (!tags.Contains(newTag.Trim()))
+			var tags = SOQuery.ParseTags(_searchString);
+			string trimmed = newTag.Trim();
+			if (!tags.Contains(trimmed))
 			{
 				if (tags.Count > 0) _searchString += ", ";
-				_searchString += newTag.Trim();
+				_searchString += trimmed;
 				_currentPage = 0;
 				Repaint();
 			}
@@ -437,7 +538,7 @@ namespace NestedSO.SOEditor
 
 		private void RemoveTag(string tagToRemove)
 		{
-			var tags = _searchString.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries).Select(t => t.Trim()).ToList();
+			var tags = SOQuery.ParseTags(_searchString);
 			tags.Remove(tagToRemove);
 			_searchString = string.Join(", ", tags);
 			_currentPage = 0;
@@ -450,17 +551,9 @@ namespace NestedSO.SOEditor
 			var filtered = new List<ScriptableObject>();
 			foreach (var obj in _db.SOQueryEntities)
 			{
-				if (obj is not ISOQueryEntity entity) continue;
-				bool match = true;
-				foreach (var term in searchTerms)
-				{
-					bool hasTag = entity.Tags.Contains(term);
-					bool isType = false;
-					Type t = obj.GetType();
-					while (t != null && t != typeof(ScriptableObject)) { if (t.Name.Equals(term, StringComparison.OrdinalIgnoreCase)) { isType = true; break; } t = t.BaseType; }
-					if (!hasTag && !isType) { match = false; break; }
-				}
-				if (match) filtered.Add(obj);
+				if (obj == null) continue;
+				var entityTags = new HashSet<string>(SOQuery.GetSearchableTags(obj));
+				if (searchTerms.All(term => entityTags.Contains(term))) filtered.Add(obj);
 			}
 			return filtered;
 		}

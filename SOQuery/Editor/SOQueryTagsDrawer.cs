@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using System.Collections.Generic;
+using System.Reflection;
 
 namespace NestedSO.SOEditor
 {
@@ -9,6 +10,8 @@ namespace NestedSO.SOEditor
 	public class SOQueryTagsDrawer : PropertyDrawer
 	{
 		private GUIStyle _tagPillStyle;
+		private GUIStyle _typeTagStyle;
+		private GUIStyle _runtimeTagStyle;
 		private SOQueryDatabase _cachedDb;
 
 		private SOQueryDatabase GetDatabase()
@@ -22,7 +25,6 @@ namespace NestedSO.SOEditor
 
 		public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
 		{
-			// Find the inner list: "_tags"
 			SerializedProperty listProp = property.FindPropertyRelative("_tags");
 			if (listProp == null)
 			{
@@ -33,26 +35,24 @@ namespace NestedSO.SOEditor
 			InitializeStyles();
 			EditorGUI.BeginProperty(position, label, property);
 
-			// 1. Draw Label
+			// Draw Label
 			Rect labelRect = new Rect(position.x, position.y, position.width, 18);
 			EditorGUI.LabelField(labelRect, label);
 
-			// 2. Setup Layout
+			// Setup Layout
 			float currentX = position.x;
 			float currentY = position.y + 20; // Start below label
 			float containerWidth = position.width;
 			float rowHeight = 22;
 
-			// 3. Draw Existing Tags
+			// --- Draw Editable Editor Tags ---
 			for (int i = 0; i < listProp.arraySize; i++)
 			{
 				SerializedProperty element = listProp.GetArrayElementAtIndex(i);
 				string tagValue = element.stringValue;
 
-				// Calc width: Text + " x" padding
 				float tagWidth = _tagPillStyle.CalcSize(new GUIContent($"{tagValue}  ×")).x;
 
-				// Check for line break
 				if (currentX + tagWidth > position.x + containerWidth)
 				{
 					currentX = position.x;
@@ -61,18 +61,17 @@ namespace NestedSO.SOEditor
 
 				Rect tagRect = new Rect(currentX, currentY, tagWidth, 20);
 
-				// Draw Clickable Pill
 				if (GUI.Button(tagRect, $"{tagValue}  ×", _tagPillStyle))
 				{
 					listProp.DeleteArrayElementAtIndex(i);
-					property.serializedObject.ApplyModifiedProperties(); // Save immediately
+					property.serializedObject.ApplyModifiedProperties();
 					break;
 				}
 
-				currentX += tagWidth + 4; // Spacing
+				currentX += tagWidth + 4;
 			}
 
-			// 4. Draw Add Button (+)
+			// --- Draw Add Button (+) ---
 			float btnWidth = 24;
 			if (currentX + btnWidth > position.x + containerWidth)
 			{
@@ -86,6 +85,39 @@ namespace NestedSO.SOEditor
 				ShowAddDropdown(listProp);
 			}
 
+			// --- Draw Read-Only Tags (Type & Runtime) ---
+			var autoTags = GetAutoTags(property);
+			if (autoTags.Count > 0)
+			{
+				currentX = position.x;
+				currentY += rowHeight + 4;
+
+				Rect iconRect = new Rect(currentX, currentY + 3, 16, 16);
+				GUI.Label(iconRect, EditorGUIUtility.IconContent("d_FilterByLabel"), EditorStyles.miniLabel);
+				currentX += 20;
+
+				foreach (var (tag, style) in autoTags)
+				{
+					float tagW = style.CalcSize(new GUIContent(tag)).x;
+
+					if (currentX + tagW > position.x + containerWidth)
+					{
+						currentX = position.x;
+						currentY += rowHeight;
+					}
+
+					Rect r = new Rect(currentX, currentY, tagW, 18);
+
+					// Draw Read-Only Label/Button
+					if (Event.current.type == EventType.Repaint)
+					{
+						style.Draw(r, new GUIContent(tag), false, false, false, false);
+					}
+
+					currentX += tagW + 4;
+				}
+			}
+
 			EditorGUI.EndProperty();
 		}
 
@@ -96,10 +128,11 @@ namespace NestedSO.SOEditor
 			SerializedProperty listProp = property.FindPropertyRelative("_tags");
 			if (listProp == null) return 20;
 
-			float width = EditorGUIUtility.currentViewWidth - 40; // Approx inspector width
-			float height = 24; // Initial label height
+			float width = EditorGUIUtility.currentViewWidth - 40;
+			float height = 24;
 			float currentX = 0;
 
+			// Measure Editor Tags
 			for (int i = 0; i < listProp.arraySize; i++)
 			{
 				string val = listProp.GetArrayElementAtIndex(i).stringValue;
@@ -112,15 +145,88 @@ namespace NestedSO.SOEditor
 				}
 				currentX += tagW + 4;
 			}
+			if (currentX + 24 > width) height += 22; // Space for (+) button
 
-			if (currentX + 24 > width) height += 22;
+			// Measure Auto Tags (Type + Runtime)
+			var autoTags = GetAutoTags(property);
+			if (autoTags.Count > 0)
+			{
+				height += 26; // Spacing + New Line
+				currentX = 20; // Indent for icon
 
-			return height + 10; // Bottom padding
+				foreach (var (tag, style) in autoTags)
+				{
+					float tagW = style.CalcSize(new GUIContent(tag)).x;
+					if (currentX + tagW > width)
+					{
+						currentX = 0;
+						height += 22;
+					}
+					currentX += tagW + 4;
+				}
+			}
+
+			return height + 10;
+		}
+
+		// --- Helpers ---
+
+		// Returns list of (TagName, StyleToUse)
+		private List<(string tag, GUIStyle style)> GetAutoTags(SerializedProperty property)
+		{
+			var results = new List<(string, GUIStyle)>();
+			var targetObj = property.serializedObject.targetObject;
+
+			if (targetObj == null) return results;
+
+			// Type Tags (Blue)
+			System.Type t = targetObj.GetType();
+			while (t != null && t != typeof(ScriptableObject))
+			{
+				// Check Exclusion Attribute (Requires SOQuery reference)
+				if (!SOQuery.IsTypeExcluded(t))
+				{
+					results.Add((t.Name, _typeTagStyle));
+				}
+				t = t.BaseType;
+			}
+
+			// Runtime Tags (Orange)
+			// We need Reflection to get the private _runtimeTags hashset from the SOQueryTags instance
+			try
+			{
+				// Get the SOQueryTags instance from the field
+				object tagsInstance = fieldInfo.GetValue(targetObj);
+				if (tagsInstance != null)
+				{
+					// Access private field '_runtimeTags'
+					var runtimeField = tagsInstance.GetType().GetField("_runtimeTags", BindingFlags.NonPublic | BindingFlags.Instance);
+					if (runtimeField != null)
+					{
+						var runtimeSet = runtimeField.GetValue(tagsInstance) as HashSet<string>;
+						if (runtimeSet != null)
+						{
+							foreach (var tag in runtimeSet)
+							{
+								results.Add((tag, _runtimeTagStyle));
+							}
+						}
+					}
+				}
+			}
+			catch
+			{
+				// Reflection might fail on intricate nesting, fail silently for drawer
+			}
+
+			return results;
 		}
 
 		private void ShowAddDropdown(SerializedProperty listProp)
 		{
 			var db = GetDatabase();
+			if (db == null) return;
+
 			HashSet<string> allTags = SOQueryDatabaseEditor.GetSOQueryEntityTags(db);
 
 			// Filter out applied tags
@@ -150,6 +256,25 @@ namespace NestedSO.SOEditor
 				_tagPillStyle.alignment = TextAnchor.MiddleLeft;
 				_tagPillStyle.padding = new RectOffset(6, 6, 3, 3);
 				_tagPillStyle.normal.textColor = EditorGUIUtility.isProSkin ? new Color(0.9f, 0.9f, 0.9f) : Color.black;
+			}
+
+			// Blue-ish for Types
+			if (_typeTagStyle == null)
+			{
+				_typeTagStyle = new GUIStyle(EditorStyles.miniButton);
+				_typeTagStyle.fontSize = 10;
+				_typeTagStyle.fontStyle = FontStyle.Bold;
+				_typeTagStyle.fixedHeight = 18;
+				_typeTagStyle.normal.textColor = EditorGUIUtility.isProSkin ? new Color(0.4f, 0.7f, 1f) : new Color(0.1f, 0.3f, 0.8f);
+			}
+
+			// Orange-ish for Runtime
+			if (_runtimeTagStyle == null)
+			{
+				_runtimeTagStyle = new GUIStyle(EditorStyles.miniButton);
+				_runtimeTagStyle.fontSize = 10;
+				_runtimeTagStyle.fixedHeight = 18;
+				_runtimeTagStyle.normal.textColor = EditorGUIUtility.isProSkin ? new Color(1f, 0.8f, 0.4f) : new Color(0.8f, 0.5f, 0.1f);
 			}
 		}
 	}

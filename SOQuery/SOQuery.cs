@@ -38,14 +38,9 @@ namespace NestedSO
 				foreach (string query in queriesToCache)
 				{
 					if (string.IsNullOrWhiteSpace(query)) continue;
-
-					// Parse the tags: "Mission, Hard" -> ["Hard", "Mission"] (Sorted)
-					var tags = query.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
-									.Select(t => t.Trim())
-									.OrderBy(t => t)
-									.ToArray();
-
-					if (tags.Length == 0) continue;
+					
+					var tags = ParseTags(query, sort: true);
+					if (tags.Count == 0) continue;
 
 					string cacheKey = string.Join("|", tags);
 
@@ -73,34 +68,14 @@ namespace NestedSO
 					_idIndex[entity.Id] = entity;
 				}
 
-				// Manual Tags
-				var currentEntityTags = new HashSet<string>(entity.Tags);
+				var currentEntityTags = new HashSet<string>();
 
-				// Type Tree -> Tags
-				Type currentType = obj.GetType();
-				while (currentType != null && currentType != typeof(ScriptableObject))
+				foreach (var tag in GetSearchableTags(obj))
 				{
-					if (!IsTypeExcluded(currentType))
-					{
-						string typeName = currentType.Name;
-
-						// Add to local set
-						currentEntityTags.Add(typeName);
-
-						// Add to Global Index
-						AddToIndex(typeName, entity);
-					}
-
-					currentType = currentType.BaseType;
-				}
-
-				// Add Manual tags to Global Index
-				foreach (var tag in entity.Tags)
-				{
+					currentEntityTags.Add(tag);
 					AddToIndex(tag, entity);
 				}
 
-				// Prewarm Rules
 				for (int i = 0; i < prewarmRules.Count; i++)
 				{
 					if (prewarmRules[i].RequiredTags.IsSubsetOf(currentEntityTags))
@@ -122,6 +97,39 @@ namespace NestedSO
 				_idIndex.Clear();
 				_isInitialized = false;
 			}
+		}
+
+		public static IEnumerable<string> GetSearchableTags(ScriptableObject obj)
+		{
+			// 1. Manual Tags
+			if (obj is ISOQueryEntity entity)
+			{
+				foreach (var t in entity.Tags) yield return t;
+			}
+
+			// 2. Type Hierarchy
+			Type currentType = obj.GetType();
+			while (currentType != null && currentType != typeof(ScriptableObject))
+			{
+				if (!IsTypeExcluded(currentType))
+				{
+					yield return currentType.Name;
+				}
+				currentType = currentType.BaseType;
+			}
+		}
+
+		public static List<string> ParseTags(string input, bool sort = false)
+		{
+			if (string.IsNullOrWhiteSpace(input)) return new List<string>();
+
+			var result = input.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries)
+							  .Select(t => t.Trim())
+							  .ToList();
+
+			if (sort) result.Sort();
+
+			return result;
 		}
 
 		public static bool IsTypeExcluded(Type t)
