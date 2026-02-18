@@ -15,7 +15,7 @@ namespace NestedSO
 		[Tooltip("Define queries here (e.g. 'Mission, Hard') to pre-calculate their results during the build step.")]
 		public List<string> PrewarmQueries = new List<string>();
 
-		// Cached Indexing
+		// Cached Indexing (Optimized: Stores Indices instead of Object References)
 		[SerializeField]
 		private List<TagIndexEntry> _serializedTagIndex = new List<TagIndexEntry>();
 
@@ -25,7 +25,7 @@ namespace NestedSO
 		[SerializeField]
 		private List<IdIndexEntry> _serializedIdIndex = new List<IdIndexEntry>();
 
-		// Runtime Look-up Maps (based on Index)
+		// Runtime Look-up Maps
 		private Dictionary<string, HashSet<ISOQueryEntity>> _runtimeTagIndex;
 		private Dictionary<string, List<ISOQueryEntity>> _runtimeQueryCache;
 		private Dictionary<string, ISOQueryEntity> _runtimeIdIndex;
@@ -40,9 +40,12 @@ namespace NestedSO
 			foreach (var entry in _serializedTagIndex)
 			{
 				var set = new HashSet<ISOQueryEntity>();
-				foreach (var obj in entry.Entities)
+				foreach (int index in entry.EntityIndices)
 				{
-					if (obj is ISOQueryEntity entity) set.Add(entity);
+					if (IsValidIndex(index))
+					{
+						if (SOQueryEntities[index] is ISOQueryEntity entity) set.Add(entity);
+					}
 				}
 				_runtimeTagIndex[entry.Tag] = set;
 			}
@@ -51,9 +54,12 @@ namespace NestedSO
 			foreach (var entry in _serializedQueryCache)
 			{
 				var list = new List<ISOQueryEntity>();
-				foreach (var obj in entry.Results)
+				foreach (int index in entry.ResultIndices)
 				{
-					if (obj is ISOQueryEntity entity) list.Add(entity);
+					if (IsValidIndex(index))
+					{
+						if (SOQueryEntities[index] is ISOQueryEntity entity) list.Add(entity);
+					}
 				}
 				_runtimeQueryCache[entry.QueryKey] = list;
 			}
@@ -61,9 +67,12 @@ namespace NestedSO
 			_runtimeIdIndex = new Dictionary<string, ISOQueryEntity>(_serializedIdIndex.Count);
 			foreach (var entry in _serializedIdIndex)
 			{
-				if (entry.Entity is ISOQueryEntity isoEntity)
+				if (IsValidIndex(entry.EntityIndex))
 				{
-					_runtimeIdIndex[entry.Id] = isoEntity;
+					if (SOQueryEntities[entry.EntityIndex] is ISOQueryEntity isoEntity)
+					{
+						_runtimeIdIndex[entry.Id] = isoEntity;
+					}
 				}
 			}
 
@@ -79,6 +88,11 @@ namespace NestedSO
 				_runtimeIdIndex?.Clear();
 				_isInitialized = false;
 			}
+		}
+
+		private bool IsValidIndex(int index)
+		{
+			return index >= 0 && index < SOQueryEntities.Count && SOQueryEntities[index] != null;
 		}
 
 		public T Get<T>(string id) where T : ScriptableObject, ISOQueryEntity
@@ -112,10 +126,9 @@ namespace NestedSO
 			searchTags.Sort();
 			string cacheKey = string.Join("|", searchTags);
 
-			// Check Cache
 			if (_runtimeQueryCache.TryGetValue(cacheKey, out List<ISOQueryEntity> cachedResult))
 			{
-				if (typeof(T) == typeof(ISOQueryEntity)) return cachedResult as List<T>; // Unsafe cast optimization
+				if (typeof(T) == typeof(ISOQueryEntity)) return cachedResult as List<T>;
 				return cachedResult.Cast<T>().ToList();
 			}
 
@@ -156,11 +169,19 @@ namespace NestedSO
 			_serializedQueryCache.Clear();
 			_serializedIdIndex.Clear();
 
-			var tempTagMap = new Dictionary<string, HashSet<ScriptableObject>>();
-			var tempIdMap = new Dictionary<string, ScriptableObject>();
-
-			foreach (var obj in SOQueryEntities)
+			// 1. Create Lookup: Object -> Index
+			var entityToIndex = new Dictionary<ScriptableObject, int>();
+			for (int i = 0; i < SOQueryEntities.Count; i++)
 			{
+				if (SOQueryEntities[i] != null) entityToIndex[SOQueryEntities[i]] = i;
+			}
+
+			var tempTagMap = new Dictionary<string, List<int>>();
+			var tempIdMap = new Dictionary<string, int>();
+
+			for (int i = 0; i < SOQueryEntities.Count; i++)
+			{
+				var obj = SOQueryEntities[i];
 				if (obj == null) continue;
 				if (obj is not ISOQueryEntity entity) continue;
 
@@ -169,8 +190,8 @@ namespace NestedSO
 				{
 					if (!tempIdMap.ContainsKey(entity.Id))
 					{
-						tempIdMap[entity.Id] = obj;
-						_serializedIdIndex.Add(new IdIndexEntry { Id = entity.Id, Entity = obj });
+						tempIdMap[entity.Id] = i;
+						_serializedIdIndex.Add(new IdIndexEntry { Id = entity.Id, EntityIndex = i });
 					}
 					else
 					{
@@ -181,14 +202,14 @@ namespace NestedSO
 				// Tag Indexing
 				foreach (var tag in GetSearchableTags(obj))
 				{
-					if (!tempTagMap.ContainsKey(tag)) tempTagMap[tag] = new HashSet<ScriptableObject>();
-					tempTagMap[tag].Add(obj);
+					if (!tempTagMap.ContainsKey(tag)) tempTagMap[tag] = new List<int>();
+					tempTagMap[tag].Add(i);
 				}
 			}
 
 			foreach (var kvp in tempTagMap)
 			{
-				_serializedTagIndex.Add(new TagIndexEntry { Tag = kvp.Key, Entities = kvp.Value.ToList() });
+				_serializedTagIndex.Add(new TagIndexEntry { Tag = kvp.Key, EntityIndices = kvp.Value });
 			}
 
 			foreach (var queryStr in PrewarmQueries)
@@ -198,35 +219,29 @@ namespace NestedSO
 
 				string key = string.Join("|", tags);
 
-				HashSet<ScriptableObject> result = null;
-				bool possible = true;
+				List<int> resultIndices = null;
 
 				foreach (var tag in tags)
 				{
-					if (!tempTagMap.TryGetValue(tag, out var bucket))
+					if (!tempTagMap.TryGetValue(tag, out var currentIndices))
 					{
-						possible = false;
+						resultIndices = new List<int>();
 						break;
 					}
 
-					if (result == null) result = new HashSet<ScriptableObject>(bucket);
-					else result.IntersectWith(bucket);
+					if (resultIndices == null) resultIndices = new List<int>(currentIndices);
+					else resultIndices = resultIndices.Intersect(currentIndices).ToList();
 				}
 
-				if (possible && result != null)
-				{
-					_serializedQueryCache.Add(new QueryCacheEntry { QueryKey = key, Results = result.ToList() });
-				}
-				else
-				{
-					_serializedQueryCache.Add(new QueryCacheEntry { QueryKey = key, Results = new List<ScriptableObject>() });
-				}
+				if (resultIndices == null) resultIndices = new List<int>();
+
+				_serializedQueryCache.Add(new QueryCacheEntry { QueryKey = key, ResultIndices = resultIndices });
 			}
 
 #if UNITY_EDITOR
 			UnityEditor.EditorUtility.SetDirty(this);
 #endif
-			Debug.Log($"[SOQueryDatabase] Rebuilt Index. Tags: {_serializedTagIndex.Count}, IDs: {_serializedIdIndex.Count}, Cached Queries: {_serializedQueryCache.Count}");
+			Debug.Log($"[SOQueryDatabase] Rebuilt Index (Optimized). Tags: {_serializedTagIndex.Count}, IDs: {_serializedIdIndex.Count}, Cached Queries: {_serializedQueryCache.Count}");
 		}
 
 		// =================================================================================================
@@ -258,7 +273,7 @@ namespace NestedSO
 
 		public static bool IsTypeExcluded(Type t)
 		{
-			return t.IsDefined(typeof(SOQueryExcludeTypeAttribute), false) || t.IsAbstract;
+			return t.IsDefined(typeof(SOQueryExcludeTypeAttribute), false) || t.IsGenericType;
 		}
 
 		public static List<string> ParseTags(string input, bool sort = false)
@@ -279,21 +294,21 @@ namespace NestedSO
 		private struct TagIndexEntry
 		{
 			public string Tag;
-			public List<ScriptableObject> Entities;
+			public List<int> EntityIndices;
 		}
 
 		[System.Serializable]
 		private struct QueryCacheEntry
 		{
 			public string QueryKey;
-			public List<ScriptableObject> Results;
+			public List<int> ResultIndices;
 		}
 
 		[System.Serializable]
 		private struct IdIndexEntry
 		{
 			public string Id;
-			public ScriptableObject Entity;
+			public int EntityIndex;
 		}
 
 		// =================================================================================================

@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System;
 using System.Reflection;
-using NestedSO;
+using NestedSO; 
 using NestedSO.Processor;
 
 namespace NestedSO.SOEditor
@@ -51,7 +51,7 @@ namespace NestedSO.SOEditor
 		// --- Integrity State ---
 		private string _cacheValidationResult = "";
 		private MessageType _cacheValidationType = MessageType.None;
-		private bool _hasDuplicateErrors = false; // <--- NEW FLAG
+		private bool _hasDuplicateErrors = false;
 
 		// --- Expansion State ---
 		private HashSet<int> _expandedItems = new HashSet<int>();
@@ -88,7 +88,7 @@ namespace NestedSO.SOEditor
 			DrawTagsExplorer();
 
 			EditorGUILayout.Space(5);
-			DrawSearchArea();
+			DrawSearchArea(); 
 
 			// --- DATABASE OPERATIONS ---
 			EditorGUILayout.Space(10);
@@ -98,7 +98,7 @@ namespace NestedSO.SOEditor
 			if (GUILayout.Button(new GUIContent(" Populate List", EditorGUIUtility.IconContent("d_Folder Icon").image), GUILayout.Height(24)))
 			{
 				SOQueryDatabaseProcessor.PopulateDatabase(_db);
-				SOQueryDatabaseProcessor.BuildCache(_db);
+				SOQueryDatabaseProcessor.BuildCache(_db); 
 				EditorUtility.SetDirty(_db);
 				AnalyzeTags();
 			}
@@ -110,8 +110,9 @@ namespace NestedSO.SOEditor
 			}
 			EditorGUILayout.EndHorizontal();
 
+			// --- HEALTH CHECK ---
 			EditorGUILayout.Space(5);
-			if (GUILayout.Button("Verify Integrity", GUILayout.Height(24)))
+			if (GUILayout.Button("Verify Integrity (Check Duplicates)", GUILayout.Height(24)))
 			{
 				RunCacheIntegrityCheck();
 			}
@@ -119,7 +120,7 @@ namespace NestedSO.SOEditor
 			if (!string.IsNullOrEmpty(_cacheValidationResult))
 			{
 				EditorGUILayout.HelpBox(_cacheValidationResult, _cacheValidationType);
-
+				
 				if (_hasDuplicateErrors)
 				{
 					GUI.backgroundColor = new Color(1f, 0.7f, 0.7f);
@@ -143,17 +144,21 @@ namespace NestedSO.SOEditor
 			serializedObject.ApplyModifiedProperties();
 		}
 
+		// ==================================================================================
+		// INTEGRITY & REPAIR LOGIC (Updated for Int Indices)
+		// ==================================================================================
+
 		private void RunCacheIntegrityCheck()
 		{
 			_hasDuplicateErrors = false;
 
-			// Check Source Data for Duplicates
+			// 1. Check Source Data for Duplicates
 			var idMap = new Dictionary<string, List<string>>();
 			int nullRefs = 0;
 
 			foreach (var obj in _db.SOQueryEntities)
 			{
-				if (obj == null)
+				if (obj == null) 
 				{
 					nullRefs++;
 					continue;
@@ -176,13 +181,12 @@ namespace NestedSO.SOEditor
 				{
 					errorMsg += $"- ID '{dup.Key}' used by: {string.Join(", ", dup.Value)}\n";
 				}
-
+				
 				_cacheValidationResult = errorMsg;
 				_cacheValidationType = MessageType.Error;
 				return;
 			}
 
-			// Check Nulls
 			if (nullRefs > 0)
 			{
 				_cacheValidationResult = $"Database contains {nullRefs} null references. Please click 'Populate List'.";
@@ -190,9 +194,9 @@ namespace NestedSO.SOEditor
 				return;
 			}
 
-			// Check Serialized Cache vs Source Count
+			// 2. Check Serialized Cache vs Source Count
 			var idIndexProp = serializedObject.FindProperty("_serializedIdIndex");
-
+			
 			if (idIndexProp.arraySize != idMap.Count)
 			{
 				_cacheValidationResult = $"Cache Desync: Source has {idMap.Count} unique IDs, but Cache has {idIndexProp.arraySize}. Please 'Rebuild Cache'.";
@@ -218,9 +222,9 @@ namespace NestedSO.SOEditor
 				if (seenIds.Contains(entity.Id))
 				{
 					string newId = $"{entity.Id}_{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}";
-
+					
 					SerializedObject so = new SerializedObject(obj);
-					SerializedProperty idProp = so.FindProperty("Id");
+					SerializedProperty idProp = so.FindProperty("Id"); 
 					if (idProp == null) idProp = so.FindProperty("id");
 					if (idProp == null) idProp = so.FindProperty("_id");
 					if (idProp == null) idProp = so.FindProperty("<Id>k__BackingField");
@@ -251,12 +255,15 @@ namespace NestedSO.SOEditor
 			}
 		}
 
+		// ==================================================================================
+		// QUERY AREA (Updated for Int Indices)
+		// ==================================================================================
+
 		private void DrawSearchArea()
 		{
 			EditorGUILayout.LabelField("Query Playground", EditorStyles.boldLabel);
 			EditorGUILayout.BeginVertical("box");
 
-			// Search Bar & Pills
 			EditorGUILayout.BeginHorizontal();
 			var currentTags = SOQueryDatabase.ParseTags(_searchString);
 			foreach (var tag in currentTags.ToList())
@@ -270,11 +277,11 @@ namespace NestedSO.SOEditor
 			GUI.backgroundColor = c;
 			EditorGUILayout.EndHorizontal();
 
-			// Calculate Results (Live vs Cache)
+			// Calculate Results
 			var liveResults = FilterList(currentTags);
 			ValidateCacheAgainstLive(currentTags, liveResults);
 
-			// Draw Cache Status Banner
+			// Draw Cache Status
 			if (_isCacheStale)
 			{
 				EditorGUILayout.BeginVertical(EditorStyles.helpBox);
@@ -298,12 +305,9 @@ namespace NestedSO.SOEditor
 			{
 				EditorGUILayout.BeginHorizontal();
 				GUILayout.FlexibleSpace();
-
 				var icon = EditorGUIUtility.IconContent("TestPassed");
 				if (icon == null) icon = EditorGUIUtility.IconContent("Collab");
-
 				if (icon != null) GUILayout.Label(icon, GUILayout.Width(16), GUILayout.Height(14));
-
 				GUILayout.Label("Cache Verified", EditorStyles.miniLabel);
 				EditorGUILayout.EndHorizontal();
 			}
@@ -329,7 +333,7 @@ namespace NestedSO.SOEditor
 			}
 			EditorGUILayout.EndHorizontal();
 
-			// Result
+			// Result List
 			_showConfigs = EditorGUILayout.Foldout(_showConfigs, "Results Preview", true);
 			if (_showConfigs)
 			{
@@ -345,8 +349,6 @@ namespace NestedSO.SOEditor
 			EditorGUILayout.EndVertical();
 		}
 
-		// --- Cache Validation Logic ---
-
 		private void ValidateCacheAgainstLive(List<string> tags, List<ScriptableObject> liveResults)
 		{
 			if (tags == null || tags.Count == 0)
@@ -356,13 +358,14 @@ namespace NestedSO.SOEditor
 				return;
 			}
 
-			// Simulate Cache Lookup
+			// Use the new integer-based property names
 			var tagIndexProp = serializedObject.FindProperty("_serializedTagIndex");
 			var queryCacheProp = serializedObject.FindProperty("_serializedQueryCache");
+			var mainListProp = serializedObject.FindProperty("SOQueryEntities");
 
-			HashSet<int> cacheResultIDs = null;
+			HashSet<int> cacheResultInstanceIDs = null;
 
-			// Check Prewarm first
+			// Check Prewarm
 			string key = string.Join("|", tags);
 			bool prewarmFound = false;
 			for (int i = 0; i < queryCacheProp.arraySize; i++)
@@ -370,24 +373,29 @@ namespace NestedSO.SOEditor
 				var entry = queryCacheProp.GetArrayElementAtIndex(i);
 				if (entry.FindPropertyRelative("QueryKey").stringValue == key)
 				{
-					cacheResultIDs = new HashSet<int>();
-					var results = entry.FindPropertyRelative("Results");
-					for (int k = 0; k < results.arraySize; k++)
+					cacheResultInstanceIDs = new HashSet<int>();
+					var indices = entry.FindPropertyRelative("ResultIndices"); // New Name
+					
+					for (int k = 0; k < indices.arraySize; k++)
 					{
-						var obj = results.GetArrayElementAtIndex(k).objectReferenceValue;
-						if (obj != null) cacheResultIDs.Add(obj.GetInstanceID());
+						int index = indices.GetArrayElementAtIndex(k).intValue;
+						if (index >= 0 && index < mainListProp.arraySize)
+						{
+							var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
+							if (obj != null) cacheResultInstanceIDs.Add(obj.GetInstanceID());
+						}
 					}
 					prewarmFound = true;
 					break;
 				}
 			}
 
-			// If not prewarmed, simulate index intersection
+			// Simulate Intersection
 			if (!prewarmFound)
 			{
 				foreach (var tag in tags)
 				{
-					HashSet<int> currentTagIDs = new HashSet<int>();
+					HashSet<int> currentTagInstanceIDs = new HashSet<int>();
 					bool tagFound = false;
 
 					for (int i = 0; i < tagIndexProp.arraySize; i++)
@@ -395,11 +403,15 @@ namespace NestedSO.SOEditor
 						var entry = tagIndexProp.GetArrayElementAtIndex(i);
 						if (entry.FindPropertyRelative("Tag").stringValue == tag)
 						{
-							var entityList = entry.FindPropertyRelative("Entities");
-							for (int k = 0; k < entityList.arraySize; k++)
+							var indices = entry.FindPropertyRelative("EntityIndices"); // New Name
+							for (int k = 0; k < indices.arraySize; k++)
 							{
-								var obj = entityList.GetArrayElementAtIndex(k).objectReferenceValue;
-								if (obj != null) currentTagIDs.Add(obj.GetInstanceID());
+								int index = indices.GetArrayElementAtIndex(k).intValue;
+								if (index >= 0 && index < mainListProp.arraySize)
+								{
+									var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
+									if (obj != null) currentTagInstanceIDs.Add(obj.GetInstanceID());
+								}
 							}
 							tagFound = true;
 							break;
@@ -408,49 +420,33 @@ namespace NestedSO.SOEditor
 
 					if (!tagFound)
 					{
-						cacheResultIDs = new HashSet<int>();
+						cacheResultInstanceIDs = new HashSet<int>();
 						break;
 					}
 
-					if (cacheResultIDs == null) cacheResultIDs = currentTagIDs;
-					else cacheResultIDs.IntersectWith(currentTagIDs);
+					if (cacheResultInstanceIDs == null) cacheResultInstanceIDs = currentTagInstanceIDs;
+					else cacheResultInstanceIDs.IntersectWith(currentTagInstanceIDs);
 				}
 			}
 
-			if (cacheResultIDs == null) cacheResultIDs = new HashSet<int>();
-			_cachedResultIDs = cacheResultIDs;
+			if (cacheResultInstanceIDs == null) cacheResultInstanceIDs = new HashSet<int>();
+			_cachedResultIDs = cacheResultInstanceIDs;
 
 			// Compare
-			int liveCount = liveResults.Count;
-			int cacheCount = cacheResultIDs.Count;
-
-			if (liveCount != cacheCount)
+			if (liveResults.Count != cacheResultInstanceIDs.Count)
 			{
 				_isCacheStale = true;
-				_staleReason = $"Live found {liveCount}, Cache found {cacheCount}.";
+				_staleReason = $"Live: {liveResults.Count}, Cache: {cacheResultInstanceIDs.Count}";
 			}
 			else
 			{
 				bool mismatch = false;
 				foreach (var liveItem in liveResults)
 				{
-					if (!cacheResultIDs.Contains(liveItem.GetInstanceID()))
-					{
-						mismatch = true;
-						break;
-					}
+					if (!_cachedResultIDs.Contains(liveItem.GetInstanceID())) { mismatch = true; break; }
 				}
-
-				if (mismatch)
-				{
-					_isCacheStale = true;
-					_staleReason = "Results differ (IDs mismatch).";
-				}
-				else
-				{
-					_isCacheStale = false;
-					_staleReason = "";
-				}
+				_isCacheStale = mismatch;
+				_staleReason = mismatch ? "ID Mismatch" : "";
 			}
 		}
 
@@ -502,6 +498,10 @@ namespace NestedSO.SOEditor
 			if (newExpanded && obj is ISOQueryEntity expandedEntity) DrawExpandedDetails(obj, expandedEntity);
 			EditorGUILayout.EndVertical();
 		}
+
+		// ==================================================================================
+		// REST OF CLASS (Tags Explorer, Headers, Helpers)
+		// ==================================================================================
 
 		private void AnalyzeTags()
 		{

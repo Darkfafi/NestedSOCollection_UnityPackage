@@ -105,6 +105,7 @@ namespace NestedSO.Processor
 				}
 			}
 		}
+
 		public static void BuildCache(SOQueryDatabase db)
 		{
 			if (db == null) return;
@@ -120,43 +121,40 @@ namespace NestedSO.Processor
 			idIndexProp.ClearArray();
 			queryCacheProp.ClearArray();
 
-			var tempTagMap = new Dictionary<string, HashSet<ScriptableObject>>();
-			var tempIdMap = new Dictionary<string, ScriptableObject>();
+			var tempTagMap = new Dictionary<string, List<int>>();
+			var tempIdMap = new Dictionary<string, int>();
 
-			// Scan the entities we just populated
-			foreach (var obj in db.SOQueryEntities)
+			// Scan the entities by Index
+			for (int i = 0; i < db.SOQueryEntities.Count; i++)
 			{
+				var obj = db.SOQueryEntities[i];
 				if (obj == null) continue;
 				if (obj is not ISOQueryEntity entity) continue;
 
-				// Index ID
+				// Index ID (Store INT index)
 				if (!string.IsNullOrEmpty(entity.Id))
 				{
-					if (!tempIdMap.TryGetValue(entity.Id, out var otherEntity))
+					if (!tempIdMap.ContainsKey(entity.Id))
 					{
-						tempIdMap[entity.Id] = obj;
+						tempIdMap[entity.Id] = i;
 
 						int index = idIndexProp.arraySize;
 						idIndexProp.InsertArrayElementAtIndex(index);
 						var entry = idIndexProp.GetArrayElementAtIndex(index);
 						entry.FindPropertyRelative("Id").stringValue = entity.Id;
-						entry.FindPropertyRelative("Entity").objectReferenceValue = obj;
+						entry.FindPropertyRelative("EntityIndex").intValue = i;
 					}
 					else
 					{
-						Debug.LogWarning($"Entity {entity} and {otherEntity} have same Id: {entity.Id}");
+						Debug.LogWarning($"[SOQuery] Duplicate ID '{entity.Id}' found on {obj.name}. Skipping.");
 					}
 				}
-				else
-				{
-					Debug.LogWarning("Entity has no Id: " + entity, obj);
-				}
 
-				// Index Tags
+				// Index Tags (Store INT index)
 				foreach (var tag in SOQueryDatabase.GetSearchableTags(obj))
 				{
-					if (!tempTagMap.ContainsKey(tag)) tempTagMap[tag] = new HashSet<ScriptableObject>();
-					tempTagMap[tag].Add(obj);
+					if (!tempTagMap.ContainsKey(tag)) tempTagMap[tag] = new List<int>();
+					tempTagMap[tag].Add(i);
 				}
 			}
 
@@ -169,13 +167,13 @@ namespace NestedSO.Processor
 
 				entry.FindPropertyRelative("Tag").stringValue = kvp.Key;
 
-				var listProp = entry.FindPropertyRelative("Entities");
-				listProp.ClearArray();
-				foreach (var item in kvp.Value)
+				var indicesProp = entry.FindPropertyRelative("EntityIndices");
+				indicesProp.ClearArray();
+				foreach (int entityIdx in kvp.Value)
 				{
-					int eIndex = listProp.arraySize;
-					listProp.InsertArrayElementAtIndex(eIndex);
-					listProp.GetArrayElementAtIndex(eIndex).objectReferenceValue = item;
+					int k = indicesProp.arraySize;
+					indicesProp.InsertArrayElementAtIndex(k);
+					indicesProp.GetArrayElementAtIndex(k).intValue = entityIdx;
 				}
 			}
 
@@ -186,41 +184,39 @@ namespace NestedSO.Processor
 				if (tags.Count == 0) continue;
 
 				string key = string.Join("|", tags);
-				HashSet<ScriptableObject> result = null;
-				bool possible = true;
+				List<int> resultIndices = null;
 
 				foreach (var tag in tags)
 				{
-					if (!tempTagMap.TryGetValue(tag, out var bucket))
+					if (!tempTagMap.TryGetValue(tag, out var currentIndices))
 					{
-						possible = false;
+						resultIndices = new List<int>();
 						break;
 					}
-					if (result == null) result = new HashSet<ScriptableObject>(bucket);
-					else result.IntersectWith(bucket);
+
+					if (resultIndices == null) resultIndices = new List<int>(currentIndices);
+					else resultIndices = resultIndices.Intersect(currentIndices).ToList();
 				}
+
+				if (resultIndices == null) resultIndices = new List<int>();
 
 				int qIndex = queryCacheProp.arraySize;
 				queryCacheProp.InsertArrayElementAtIndex(qIndex);
 				var qEntry = queryCacheProp.GetArrayElementAtIndex(qIndex);
 				qEntry.FindPropertyRelative("QueryKey").stringValue = key;
 
-				var resultsList = qEntry.FindPropertyRelative("Results");
+				var resultsList = qEntry.FindPropertyRelative("ResultIndices");
 				resultsList.ClearArray();
-
-				if (possible && result != null)
+				foreach (int entityIdx in resultIndices)
 				{
-					foreach (var item in result)
-					{
-						int rIndex = resultsList.arraySize;
-						resultsList.InsertArrayElementAtIndex(rIndex);
-						resultsList.GetArrayElementAtIndex(rIndex).objectReferenceValue = item;
-					}
+					int k = resultsList.arraySize;
+					resultsList.InsertArrayElementAtIndex(k);
+					resultsList.GetArrayElementAtIndex(k).intValue = entityIdx;
 				}
 			}
 
 			sobj.ApplyModifiedProperties();
-			Debug.Log($"[SOQuery] Database '{db.name}' Cache Rebuilt.");
+			Debug.Log($"[SOQuery] Database '{db.name}' Cache Rebuilt (Optimized).");
 		}
 	}
 }
