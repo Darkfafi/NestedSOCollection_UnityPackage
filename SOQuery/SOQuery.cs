@@ -80,13 +80,16 @@ namespace NestedSO
 				Type currentType = obj.GetType();
 				while (currentType != null && currentType != typeof(ScriptableObject))
 				{
-					string typeName = currentType.Name;
+					if (!IsTypeExcluded(currentType))
+					{
+						string typeName = currentType.Name;
 
-					// Add to local set
-					currentEntityTags.Add(typeName);
+						// Add to local set
+						currentEntityTags.Add(typeName);
 
-					// Add to Global Index
-					AddToIndex(typeName, entity);
+						// Add to Global Index
+						AddToIndex(typeName, entity);
+					}
 
 					currentType = currentType.BaseType;
 				}
@@ -119,6 +122,12 @@ namespace NestedSO
 				_idIndex.Clear();
 				_isInitialized = false;
 			}
+		}
+
+		public static bool IsTypeExcluded(Type t)
+		{
+			return t.IsDefined(typeof(SOQueryExcludeTypeAttribute), false) ||
+				   t.IsAbstract;
 		}
 
 		private static void AddToIndex(string tag, ISOQueryEntity entity)

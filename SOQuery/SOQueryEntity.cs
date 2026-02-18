@@ -3,6 +3,7 @@ using UnityEngine;
 
 namespace NestedSO
 {
+	[SOQueryExcludeType]
 	public abstract class SOQueryEntity : ScriptableObject, ISOQueryEntity
 	{
 		[field: SerializeField]
