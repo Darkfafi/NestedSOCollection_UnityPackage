@@ -220,7 +220,7 @@ namespace NestedSO
 			}
 		}
 
-		public static bool IsTypeExcluded(Type t) => t.IsDefined(typeof(SOQueryExcludeTypeAttribute), false) || t.IsAbstract;
+		public static bool IsTypeExcluded(Type t) => t.IsDefined(typeof(SOQueryExcludeTypeAttribute), false) || t.IsGenericType;
 
 		public static List<string> ParseTags(string input, bool sort = false)
 		{
