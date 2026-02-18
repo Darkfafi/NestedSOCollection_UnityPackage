@@ -184,7 +184,7 @@ namespace NestedSO.SOEditor
 			while (t != null && t != typeof(ScriptableObject))
 			{
 				// Check Exclusion Attribute (Requires SOQuery reference)
-				if (!SOQuery.IsTypeExcluded(t))
+				if (!SOQueryDatabase.IsTypeExcluded(t))
 				{
 					results.Add((t.Name, _typeTagStyle));
 				}
