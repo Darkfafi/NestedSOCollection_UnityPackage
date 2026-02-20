@@ -6,7 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System;
 using System.Reflection;
-using NestedSO; 
+using NestedSO;
 using NestedSO.Processor;
 
 namespace NestedSO.SOEditor
@@ -88,7 +88,7 @@ namespace NestedSO.SOEditor
 			DrawTagsExplorer();
 
 			EditorGUILayout.Space(5);
-			DrawSearchArea(); 
+			DrawSearchArea();
 
 			// --- DATABASE OPERATIONS ---
 			EditorGUILayout.Space(10);
@@ -98,7 +98,7 @@ namespace NestedSO.SOEditor
 			if (GUILayout.Button(new GUIContent(" Populate List", EditorGUIUtility.IconContent("d_Folder Icon").image), GUILayout.Height(24)))
 			{
 				SOQueryDatabaseProcessor.PopulateDatabase(_db);
-				SOQueryDatabaseProcessor.BuildCache(_db); 
+				SOQueryDatabaseProcessor.BuildCache(_db);
 				EditorUtility.SetDirty(_db);
 				AnalyzeTags();
 			}
@@ -112,7 +112,7 @@ namespace NestedSO.SOEditor
 
 			// --- HEALTH CHECK ---
 			EditorGUILayout.Space(5);
-			if (GUILayout.Button("Verify Integrity (Check Duplicates)", GUILayout.Height(24)))
+			if (GUILayout.Button("Verify Cache", GUILayout.Height(24)))
 			{
 				RunCacheIntegrityCheck();
 			}
@@ -120,7 +120,7 @@ namespace NestedSO.SOEditor
 			if (!string.IsNullOrEmpty(_cacheValidationResult))
 			{
 				EditorGUILayout.HelpBox(_cacheValidationResult, _cacheValidationType);
-				
+
 				if (_hasDuplicateErrors)
 				{
 					GUI.backgroundColor = new Color(1f, 0.7f, 0.7f);
@@ -158,7 +158,7 @@ namespace NestedSO.SOEditor
 
 			foreach (var obj in _db.SOQueryEntities)
 			{
-				if (obj == null) 
+				if (obj == null)
 				{
 					nullRefs++;
 					continue;
@@ -181,7 +181,7 @@ namespace NestedSO.SOEditor
 				{
 					errorMsg += $"- ID '{dup.Key}' used by: {string.Join(", ", dup.Value)}\n";
 				}
-				
+
 				_cacheValidationResult = errorMsg;
 				_cacheValidationType = MessageType.Error;
 				return;
@@ -196,7 +196,7 @@ namespace NestedSO.SOEditor
 
 			// 2. Check Serialized Cache vs Source Count
 			var idIndexProp = serializedObject.FindProperty("_serializedIdIndex");
-			
+
 			if (idIndexProp.arraySize != idMap.Count)
 			{
 				_cacheValidationResult = $"Cache Desync: Source has {idMap.Count} unique IDs, but Cache has {idIndexProp.arraySize}. Please 'Rebuild Cache'.";
@@ -222,9 +222,9 @@ namespace NestedSO.SOEditor
 				if (seenIds.Contains(entity.Id))
 				{
 					string newId = $"{entity.Id}_{Guid.NewGuid().ToString().Substring(0, 4).ToUpper()}";
-					
+
 					SerializedObject so = new SerializedObject(obj);
-					SerializedProperty idProp = so.FindProperty("Id"); 
+					SerializedProperty idProp = so.FindProperty("Id");
 					if (idProp == null) idProp = so.FindProperty("id");
 					if (idProp == null) idProp = so.FindProperty("_id");
 					if (idProp == null) idProp = so.FindProperty("<Id>k__BackingField");
@@ -375,7 +375,7 @@ namespace NestedSO.SOEditor
 				{
 					cacheResultInstanceIDs = new HashSet<int>();
 					var indices = entry.FindPropertyRelative("ResultIndices"); // New Name
-					
+
 					for (int k = 0; k < indices.arraySize; k++)
 					{
 						int index = indices.GetArrayElementAtIndex(k).intValue;
