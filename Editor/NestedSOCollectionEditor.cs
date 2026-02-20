@@ -85,16 +85,16 @@ namespace NestedSO.SOEditor
 			EnsureRootIsTarget(targetCollection);
 		}
 
-		private void EnsureRootIsTarget(UnityEngine.Object target)
+		private void EnsureRootIsTarget(UnityEngine.Object targetObj)
 		{
 			if (_breadcrumbs.Count == 0)
 			{
-				_breadcrumbs.Add(target);
+				_breadcrumbs.Add(targetObj);
 			}
-			else if (_breadcrumbs[0] != target)
+			else if (_breadcrumbs[0] != targetObj)
 			{
 				_breadcrumbs.Clear();
-				_breadcrumbs.Add(target);
+				_breadcrumbs.Add(targetObj);
 			}
 		}
 
@@ -125,9 +125,9 @@ namespace NestedSO.SOEditor
 				}
 				else
 				{
-					UnityEngine.Object currentViewItem = (_breadcrumbs.Count > 0) ? _breadcrumbs[_breadcrumbs.Count - 1] : serializedObject.targetObject;
+					UnityEngine.Object currentViewItem = (_breadcrumbs.Count > 0) ? _breadcrumbs[_breadcrumbs.Count - 1] : target;
 
-					if (currentViewItem == serializedObject.targetObject)
+					if (currentViewItem == target)
 					{
 						if (_orderableList != null) _orderableList.DoLayoutList();
 					}
@@ -144,7 +144,17 @@ namespace NestedSO.SOEditor
 
 		protected void OnDisable()
 		{
-			SaveNavigationState();
+			try
+			{
+				if (target != null && !target.Equals(null))
+				{
+					SaveNavigationState();
+				}
+			}
+			catch
+			{
+				// Object was destroyed by Unity during a recompile or deletion, safely ignore.
+			}
 		}
 
 		#endregion
@@ -155,8 +165,8 @@ namespace NestedSO.SOEditor
 		{
 			EditorGUILayout.BeginHorizontal();
 			{
-				UnityEngine.Object currentItem = (_breadcrumbs.Count > 0) ? _breadcrumbs[_breadcrumbs.Count - 1] : serializedObject.targetObject;
-				bool isRoot = currentItem == serializedObject.targetObject;
+				UnityEngine.Object currentItem = (_breadcrumbs.Count > 0) ? _breadcrumbs[_breadcrumbs.Count - 1] : target;
+				bool isRoot = currentItem == target;
 
 				string title = isRoot ? $"{_baseTypeName} Collection" : currentItem.name;
 
@@ -329,6 +339,7 @@ namespace NestedSO.SOEditor
 
 				EditorGUILayout.BeginVertical("helpBox");
 				{
+					// Top Row: Name + Open Button
 					EditorGUILayout.BeginHorizontal();
 					{
 						GUILayout.Label(item.name, EditorStyles.boldLabel, GUILayout.ExpandWidth(true));
@@ -339,6 +350,7 @@ namespace NestedSO.SOEditor
 					}
 					EditorGUILayout.EndHorizontal();
 
+					// Bottom Row: Highlighted Matches
 					if (match.MatchDetails.Count > 0)
 					{
 						EditorGUI.indentLevel++;
@@ -354,7 +366,7 @@ namespace NestedSO.SOEditor
 		}
 
 		// =================================================================================================
-		// LIST CALLBACKS (Added/Modified)
+		// LIST CALLBACKS
 		// =================================================================================================
 
 		private void OnDrawListHeader(Rect rect)
@@ -395,7 +407,7 @@ namespace NestedSO.SOEditor
 			Rect deleteBtnRect = new Rect(rect.x + rect.width - btnWidth, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
 			if (IconButton(deleteBtnRect, "CollabDeleted Icon"))
 			{
-				RemoveAssetFromCollection(serializedObject.targetObject as NestedSOCollectionBase, nestedItem);
+				RemoveAssetFromCollection(target as NestedSOCollectionBase, nestedItem);
 			}
 		}
 
@@ -407,7 +419,6 @@ namespace NestedSO.SOEditor
 				.Where(t => !t.IsAbstract && !t.IsInterface)
 				.ToList();
 
-			// Include base type if concrete
 			if (!_baseType.IsAbstract && !_baseType.IsInterface && typeof(ScriptableObject).IsAssignableFrom(_baseType))
 			{
 				if (!types.Contains(_baseType)) types.Insert(0, _baseType);
@@ -417,7 +428,7 @@ namespace NestedSO.SOEditor
 			{
 				menu.AddItem(new GUIContent(t.Name), false, () =>
 				{
-					AddAssetToCollection(serializedObject.targetObject as NestedSOCollectionBase, t);
+					AddAssetToCollection(target as NestedSOCollectionBase, t);
 				});
 			}
 
@@ -430,7 +441,7 @@ namespace NestedSO.SOEditor
 			ScriptableObject item = element.objectReferenceValue as ScriptableObject;
 			if (item != null)
 			{
-				RemoveAssetFromCollection(serializedObject.targetObject as NestedSOCollectionBase, item);
+				RemoveAssetFromCollection(target as NestedSOCollectionBase, item);
 			}
 			else
 			{
@@ -497,10 +508,8 @@ namespace NestedSO.SOEditor
 
 				List<string> matchDetails = new List<string>();
 
-				// Check Name
 				bool nameMatch = item.name.ToLowerInvariant().Contains(lowerSearch);
 
-				// Check Type
 				string typeName = item.GetType().Name;
 				bool typeMatch = typeName.ToLowerInvariant().Contains(lowerSearch);
 				if (typeMatch)
@@ -508,7 +517,6 @@ namespace NestedSO.SOEditor
 					matchDetails.Add($"Type: <color=#FFFF00>{typeName}</color>");
 				}
 
-				// Check Properties
 				SerializedObject so = new SerializedObject(item);
 				SerializedProperty iter = so.GetIterator();
 
@@ -549,13 +557,11 @@ namespace NestedSO.SOEditor
 								break;
 						}
 
-						// Value Match
 						if (!string.IsNullOrEmpty(valStr) && valStr.ToLowerInvariant().Contains(lowerSearch))
 						{
 							valMatch = true;
 						}
 
-						// Property Name Match
 						bool propNameMatch = iter.displayName.ToLowerInvariant().Contains(lowerSearch);
 
 						if (valMatch || propNameMatch)
@@ -587,7 +593,6 @@ namespace NestedSO.SOEditor
 				}
 			}
 
-			// Auto-select Mass Edit Property if search matches a property name exactly
 			if (!string.IsNullOrEmpty(_searchString) && _filteredItems.Count > 0)
 			{
 				SerializedObject firstSO = new SerializedObject(_filteredItems[0].Item);
@@ -741,7 +746,8 @@ namespace NestedSO.SOEditor
 
 		private void SaveNavigationState()
 		{
-			UnityEngine.Object target = serializedObject.targetObject;
+			if (target == null) return;
+
 			string key = $"NestedSOEditor_{target.GetInstanceID()}";
 			StringBuilder dataSB = new StringBuilder();
 			for (int i = 0; i < _breadcrumbs.Count; i++)
@@ -759,9 +765,11 @@ namespace NestedSO.SOEditor
 			EditorPrefs.SetString(key, dataSB.ToString());
 		}
 
-		private void LoadNavigationState(UnityEngine.Object target)
+		private void LoadNavigationState(UnityEngine.Object targetObj)
 		{
-			string key = $"NestedSOEditor_{target.GetInstanceID()}";
+			if (targetObj == null) return;
+
+			string key = $"NestedSOEditor_{targetObj.GetInstanceID()}";
 			if (EditorPrefs.HasKey(key))
 			{
 				string data = EditorPrefs.GetString(key);
@@ -781,11 +789,6 @@ namespace NestedSO.SOEditor
 		private bool IconButton(Rect rect, string icon)
 		{
 			return GUI.Button(rect, EditorGUIUtility.FindTexture(icon), new GUIStyle("label"));
-		}
-
-		private bool IconButton(string icon, float size)
-		{
-			return GUILayout.Button(EditorGUIUtility.FindTexture(icon), new GUIStyle("label"), GUILayout.MaxWidth(size), GUILayout.MaxHeight(size));
 		}
 
 		#endregion
