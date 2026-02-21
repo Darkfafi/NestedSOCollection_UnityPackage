@@ -18,6 +18,7 @@ namespace NestedSO.SOEditor
 
 		// --- Search & Pagination ---
 		private string _searchString = "";
+		private string _idSearchString = "";
 		private Vector2 _scrollPos;
 		private bool _showConfigs = true;
 
@@ -145,19 +146,19 @@ namespace NestedSO.SOEditor
 		}
 
 		// ==================================================================================
-		// INTEGRITY & REPAIR LOGIC (Updated for Int Indices)
+		// INTEGRITY & REPAIR LOGIC
 		// ==================================================================================
 
 		private void RunCacheIntegrityCheck()
 		{
 			_hasDuplicateErrors = false;
 
-			// 1. Check Source Data for Duplicates
-			var idMap = new Dictionary<string, List<string>>();
+			var idToIndices = new Dictionary<string, List<int>>();
 			int nullRefs = 0;
 
-			foreach (var obj in _db.SOQueryEntities)
+			for (int i = 0; i < _db.SOQueryEntities.Count; i++)
 			{
+				var obj = _db.SOQueryEntities[i];
 				if (obj == null)
 				{
 					nullRefs++;
@@ -166,12 +167,12 @@ namespace NestedSO.SOEditor
 
 				if (obj is ISOQueryEntity entity && !string.IsNullOrEmpty(entity.Id))
 				{
-					if (!idMap.ContainsKey(entity.Id)) idMap[entity.Id] = new List<string>();
-					idMap[entity.Id].Add(obj.name);
+					if (!idToIndices.ContainsKey(entity.Id)) idToIndices[entity.Id] = new List<int>();
+					idToIndices[entity.Id].Add(i);
 				}
 			}
 
-			var duplicates = idMap.Where(kvp => kvp.Value.Count > 1).ToList();
+			var duplicates = idToIndices.Where(kvp => kvp.Value.Count > 1).ToList();
 
 			if (duplicates.Count > 0)
 			{
@@ -179,7 +180,7 @@ namespace NestedSO.SOEditor
 				string errorMsg = "CRITICAL: Duplicate IDs detected!\n";
 				foreach (var dup in duplicates)
 				{
-					errorMsg += $"- ID '{dup.Key}' used by: {string.Join(", ", dup.Value)}\n";
+					errorMsg += $"- ID '{dup.Key}' used by: {string.Join(", ", dup.Value.Select(idx => _db.SOQueryEntities[idx].name))}\n";
 				}
 
 				_cacheValidationResult = errorMsg;
@@ -194,17 +195,37 @@ namespace NestedSO.SOEditor
 				return;
 			}
 
-			// 2. Check Serialized Cache vs Source Count
 			var idIndexProp = serializedObject.FindProperty("_serializedIdIndex");
 
-			if (idIndexProp.arraySize != idMap.Count)
+			if (idIndexProp.arraySize != idToIndices.Count)
 			{
-				_cacheValidationResult = $"Cache Desync: Source has {idMap.Count} unique IDs, but Cache has {idIndexProp.arraySize}. Please 'Rebuild Cache'.";
+				_cacheValidationResult = $"Cache Desync: Source has {idToIndices.Count} unique IDs, but Cache has {idIndexProp.arraySize}. Please 'Rebuild Cache'.";
 				_cacheValidationType = MessageType.Warning;
 				return;
 			}
 
-			_cacheValidationResult = $"Database Healthy. {idMap.Count} Unique IDs indexed.";
+			for (int i = 0; i < idIndexProp.arraySize; i++)
+			{
+				var entry = idIndexProp.GetArrayElementAtIndex(i);
+				string cachedId = entry.FindPropertyRelative("Id").stringValue;
+				int cachedIndex = entry.FindPropertyRelative("EntityIndex").intValue;
+
+				if (!idToIndices.TryGetValue(cachedId, out var liveIndices))
+				{
+					_cacheValidationResult = $"Cache Desync: ID '{cachedId}' is in cache but missing from live data. Please 'Rebuild Cache'.";
+					_cacheValidationType = MessageType.Warning;
+					return;
+				}
+
+				if (liveIndices[0] != cachedIndex)
+				{
+					_cacheValidationResult = $"Cache Desync: ID '{cachedId}' points to wrong list index (Live: {liveIndices[0]}, Cache: {cachedIndex}). Please 'Rebuild Cache'.";
+					_cacheValidationType = MessageType.Warning;
+					return;
+				}
+			}
+
+			_cacheValidationResult = $"Database Healthy. {idToIndices.Count} Unique IDs indexed and matched exactly.";
 			_cacheValidationType = MessageType.Info;
 		}
 
@@ -256,13 +277,25 @@ namespace NestedSO.SOEditor
 		}
 
 		// ==================================================================================
-		// QUERY AREA (Updated for Int Indices)
+		// QUERY AREA (Merged ID and Tag Search)
 		// ==================================================================================
 
 		private void DrawSearchArea()
 		{
 			EditorGUILayout.LabelField("Query Playground", EditorStyles.boldLabel);
 			EditorGUILayout.BeginVertical("box");
+
+			EditorGUILayout.BeginHorizontal();
+			EditorGUILayout.LabelField("ID Contains:", GUILayout.Width(75));
+			_idSearchString = EditorGUILayout.TextField(_idSearchString, _toolbarSearchField);
+			if (GUILayout.Button(GUIContent.none, _toolbarCancelButton))
+			{
+				_idSearchString = "";
+				GUI.FocusControl(null);
+			}
+			EditorGUILayout.EndHorizontal();
+
+			EditorGUILayout.Space(2);
 
 			EditorGUILayout.BeginHorizontal();
 			var currentTags = SOQueryDatabase.ParseTags(_searchString);
@@ -273,13 +306,13 @@ namespace NestedSO.SOEditor
 			GUILayout.FlexibleSpace();
 
 			Color c = GUI.backgroundColor; GUI.backgroundColor = new Color(0.7f, 1f, 0.7f);
-			if (GUILayout.Button("+ Add Filter", GUILayout.Width(100), GUILayout.Height(20))) ShowAddFilterDropdown();
+			if (GUILayout.Button("+ Add Tag Filter", GUILayout.Width(110), GUILayout.Height(20))) ShowAddFilterDropdown();
 			GUI.backgroundColor = c;
 			EditorGUILayout.EndHorizontal();
 
 			// Calculate Results
-			var liveResults = FilterList(currentTags);
-			ValidateCacheAgainstLive(currentTags, liveResults);
+			var liveResults = FilterList(currentTags, _idSearchString);
+			ValidateCacheAgainstLive(currentTags, _idSearchString, liveResults);
 
 			// Draw Cache Status
 			if (_isCacheStale)
@@ -301,7 +334,7 @@ namespace NestedSO.SOEditor
 				EditorGUILayout.EndHorizontal();
 				EditorGUILayout.EndVertical();
 			}
-			else if (currentTags.Count > 0)
+			else if (currentTags.Count > 0 || !string.IsNullOrEmpty(_idSearchString))
 			{
 				EditorGUILayout.BeginHorizontal();
 				GUILayout.FlexibleSpace();
@@ -349,83 +382,120 @@ namespace NestedSO.SOEditor
 			EditorGUILayout.EndVertical();
 		}
 
-		private void ValidateCacheAgainstLive(List<string> tags, List<ScriptableObject> liveResults)
+		private void ValidateCacheAgainstLive(List<string> tags, string idSearch, List<ScriptableObject> liveResults)
 		{
-			if (tags == null || tags.Count == 0)
+			if ((tags == null || tags.Count == 0) && string.IsNullOrEmpty(idSearch))
 			{
 				_isCacheStale = false;
 				_cachedResultIDs.Clear();
 				return;
 			}
 
-			// Use the new integer-based property names
 			var tagIndexProp = serializedObject.FindProperty("_serializedTagIndex");
 			var queryCacheProp = serializedObject.FindProperty("_serializedQueryCache");
+			var idIndexProp = serializedObject.FindProperty("_serializedIdIndex");
 			var mainListProp = serializedObject.FindProperty("SOQueryEntities");
 
 			HashSet<int> cacheResultInstanceIDs = null;
 
-			// Check Prewarm
-			string key = string.Join("|", tags);
-			bool prewarmFound = false;
-			for (int i = 0; i < queryCacheProp.arraySize; i++)
+			// 1. Tag Intersections (If applicable)
+			if (tags != null && tags.Count > 0)
 			{
-				var entry = queryCacheProp.GetArrayElementAtIndex(i);
-				if (entry.FindPropertyRelative("QueryKey").stringValue == key)
-				{
-					cacheResultInstanceIDs = new HashSet<int>();
-					var indices = entry.FindPropertyRelative("ResultIndices"); // New Name
+				string key = string.Join("|", tags);
+				bool prewarmFound = false;
 
-					for (int k = 0; k < indices.arraySize; k++)
+				// A. Check Prewarm
+				for (int i = 0; i < queryCacheProp.arraySize; i++)
+				{
+					var entry = queryCacheProp.GetArrayElementAtIndex(i);
+					if (entry.FindPropertyRelative("QueryKey").stringValue == key)
 					{
-						int index = indices.GetArrayElementAtIndex(k).intValue;
-						if (index >= 0 && index < mainListProp.arraySize)
+						cacheResultInstanceIDs = new HashSet<int>();
+						var indices = entry.FindPropertyRelative("ResultIndices");
+
+						for (int k = 0; k < indices.arraySize; k++)
 						{
-							var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
-							if (obj != null) cacheResultInstanceIDs.Add(obj.GetInstanceID());
+							int index = indices.GetArrayElementAtIndex(k).intValue;
+							if (index >= 0 && index < mainListProp.arraySize)
+							{
+								var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
+								if (obj != null) cacheResultInstanceIDs.Add(obj.GetInstanceID());
+							}
 						}
+						prewarmFound = true;
+						break;
 					}
-					prewarmFound = true;
-					break;
+				}
+
+				if (!prewarmFound)
+				{
+					foreach (var tag in tags)
+					{
+						HashSet<int> currentTagInstanceIDs = new HashSet<int>();
+						bool tagFound = false;
+
+						for (int i = 0; i < tagIndexProp.arraySize; i++)
+						{
+							var entry = tagIndexProp.GetArrayElementAtIndex(i);
+							if (entry.FindPropertyRelative("Tag").stringValue == tag)
+							{
+								var indices = entry.FindPropertyRelative("EntityIndices");
+								for (int k = 0; k < indices.arraySize; k++)
+								{
+									int index = indices.GetArrayElementAtIndex(k).intValue;
+									if (index >= 0 && index < mainListProp.arraySize)
+									{
+										var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
+										if (obj != null) currentTagInstanceIDs.Add(obj.GetInstanceID());
+									}
+								}
+								tagFound = true;
+								break;
+							}
+						}
+
+						if (!tagFound)
+						{
+							cacheResultInstanceIDs = new HashSet<int>();
+							break;
+						}
+
+						if (cacheResultInstanceIDs == null) cacheResultInstanceIDs = currentTagInstanceIDs;
+						else cacheResultInstanceIDs.IntersectWith(currentTagInstanceIDs);
+					}
 				}
 			}
 
-			// Simulate Intersection
-			if (!prewarmFound)
+			if (!string.IsNullOrEmpty(idSearch))
 			{
-				foreach (var tag in tags)
-				{
-					HashSet<int> currentTagInstanceIDs = new HashSet<int>();
-					bool tagFound = false;
+				HashSet<int> idMatchInstanceIDs = new HashSet<int>();
+				string lowerIdSearch = idSearch.ToLowerInvariant();
 
-					for (int i = 0; i < tagIndexProp.arraySize; i++)
+				// Search through the serialized cache for partial ID matches
+				for (int i = 0; i < idIndexProp.arraySize; i++)
+				{
+					var entry = idIndexProp.GetArrayElementAtIndex(i);
+					string cachedId = entry.FindPropertyRelative("Id").stringValue;
+
+					if (cachedId.ToLowerInvariant().Contains(lowerIdSearch))
 					{
-						var entry = tagIndexProp.GetArrayElementAtIndex(i);
-						if (entry.FindPropertyRelative("Tag").stringValue == tag)
+						int index = entry.FindPropertyRelative("EntityIndex").intValue;
+						if (index >= 0 && index < mainListProp.arraySize)
 						{
-							var indices = entry.FindPropertyRelative("EntityIndices"); // New Name
-							for (int k = 0; k < indices.arraySize; k++)
-							{
-								int index = indices.GetArrayElementAtIndex(k).intValue;
-								if (index >= 0 && index < mainListProp.arraySize)
-								{
-									var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
-									if (obj != null) currentTagInstanceIDs.Add(obj.GetInstanceID());
-								}
-							}
-							tagFound = true;
-							break;
+							var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
+							if (obj != null) idMatchInstanceIDs.Add(obj.GetInstanceID());
 						}
 					}
+				}
 
-					if (!tagFound)
-					{
-						cacheResultInstanceIDs = new HashSet<int>();
-						break;
-					}
-
-					if (cacheResultInstanceIDs == null) cacheResultInstanceIDs = currentTagInstanceIDs;
-					else cacheResultInstanceIDs.IntersectWith(currentTagInstanceIDs);
+				// Intersect with Tag search if it happened, or assign directly
+				if (cacheResultInstanceIDs == null)
+				{
+					cacheResultInstanceIDs = idMatchInstanceIDs;
+				}
+				else
+				{
+					cacheResultInstanceIDs.IntersectWith(idMatchInstanceIDs);
 				}
 			}
 
@@ -446,7 +516,7 @@ namespace NestedSO.SOEditor
 					if (!_cachedResultIDs.Contains(liveItem.GetInstanceID())) { mismatch = true; break; }
 				}
 				_isCacheStale = mismatch;
-				_staleReason = mismatch ? "ID Mismatch" : "";
+				_staleReason = mismatch ? "Data Mismatch" : "";
 			}
 		}
 
@@ -609,6 +679,12 @@ namespace NestedSO.SOEditor
 		{
 			var allTags = SOQueryDatabase.GetSearchableTags(obj).ToList();
 			EditorGUILayout.BeginVertical(_expandedBoxStyle);
+
+			EditorGUILayout.BeginHorizontal();
+			EditorGUILayout.LabelField("ID:", EditorStyles.miniBoldLabel, GUILayout.Width(25));
+			EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(entity.Id) ? "[No ID]" : entity.Id, EditorStyles.miniLabel, GUILayout.Height(16));
+			EditorGUILayout.EndHorizontal();
+
 			EditorGUILayout.LabelField("All Searchable Tags:", EditorStyles.miniBoldLabel);
 			float width = EditorGUIUtility.currentViewWidth - 60;
 			float currentX = 0;
@@ -687,11 +763,36 @@ namespace NestedSO.SOEditor
 		private void AddTag(string newTag) { var tags = SOQueryDatabase.ParseTags(_searchString); string trimmed = newTag.Trim(); if (!tags.Contains(trimmed)) { if (tags.Count > 0) _searchString += ", "; _searchString += trimmed; _currentPage = 0; Repaint(); } }
 		private void RemoveTag(string tagToRemove) { var tags = SOQueryDatabase.ParseTags(_searchString); tags.Remove(tagToRemove); _searchString = string.Join(", ", tags); _currentPage = 0; Repaint(); }
 
-		private List<ScriptableObject> FilterList(List<string> searchTerms)
+		private List<ScriptableObject> FilterList(List<string> searchTerms, string idSearchString)
 		{
-			if (searchTerms == null || searchTerms.Count == 0) return _db.SOQueryEntities.Cast<ScriptableObject>().ToList();
 			var filtered = new List<ScriptableObject>();
-			foreach (var obj in _db.SOQueryEntities) { if (obj == null) continue; var entityTags = new HashSet<string>(SOQueryDatabase.GetSearchableTags(obj)); if (searchTerms.All(term => entityTags.Contains(term))) filtered.Add(obj); }
+			string lowerIdSearch = string.IsNullOrEmpty(idSearchString) ? "" : idSearchString.ToLowerInvariant();
+
+			foreach (var obj in _db.SOQueryEntities)
+			{
+				if (obj == null) continue;
+
+				if (searchTerms != null && searchTerms.Count > 0)
+				{
+					var entityTags = new HashSet<string>(SOQueryDatabase.GetSearchableTags(obj));
+					if (!searchTerms.All(term => entityTags.Contains(term))) continue;
+				}
+
+				if (!string.IsNullOrEmpty(lowerIdSearch))
+				{
+					if (obj is ISOQueryEntity entity && !string.IsNullOrEmpty(entity.Id))
+					{
+						if (!entity.Id.ToLowerInvariant().Contains(lowerIdSearch)) continue;
+					}
+					else
+					{
+						continue; // Drop entities without matching IDs
+					}
+				}
+
+				filtered.Add(obj);
+			}
+
 			return filtered;
 		}
 
