@@ -10,7 +10,7 @@ namespace NestedSO
 		public string Id
 		{
 			get; private set;
-		} = Guid.NewGuid().ToString();
+		}
 
 		[SerializeField]
 		protected SOQueryTags _tags = new SOQueryTags();
@@ -19,20 +19,31 @@ namespace NestedSO
 
 		public virtual void OnEnable()
 		{
-			_tags.ClearRuntime();
-			SyncTags(_tags);
+			RefreshEntity();
 		}
+
 		public virtual void OnValidate()
 		{
+			RefreshEntity();
+		}
+
+		protected void RefreshEntity()
+		{
+			if (string.IsNullOrEmpty(Id))
+			{
+				Id = Guid.NewGuid().ToString();
+			}
+
 			_tags.ClearRuntime();
 			SyncTags(_tags);
 		}
 
 #if UNITY_EDITOR
+
 		public void EDITOR_SetTags(SOQueryTags tags)
 		{
 			_tags.Clear();
-			if(tags != null)
+			if (tags != null)
 			{
 				foreach (var tag in tags)
 				{
