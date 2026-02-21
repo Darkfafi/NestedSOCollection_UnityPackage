@@ -684,6 +684,7 @@ namespace NestedSO.SOEditor
 			EditorGUILayout.LabelField("ID:", EditorStyles.miniBoldLabel, GUILayout.Width(25));
 			EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(entity.Id) ? "[No ID]" : entity.Id, EditorStyles.miniLabel, GUILayout.Height(16));
 			EditorGUILayout.EndHorizontal();
+			EditorGUILayout.Space(2);
 
 			EditorGUILayout.LabelField("All Searchable Tags:", EditorStyles.miniBoldLabel);
 			float width = EditorGUIUtility.currentViewWidth - 60;
