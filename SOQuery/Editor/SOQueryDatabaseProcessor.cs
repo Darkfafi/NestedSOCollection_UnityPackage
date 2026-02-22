@@ -5,13 +5,34 @@ using UnityEditor.Build.Reporting;
 using System.Collections.Generic;
 using System.Linq;
 using System;
-using NestedSO;
+using System.Reflection;
 
 namespace NestedSO.Processor
 {
 	public class SOQueryDatabaseProcessor : IPreprocessBuildWithReport
 	{
 		public int callbackOrder => 0;
+
+		private const string AUTO_REFRESH_PREF_KEY = "NestedSO_AutoRefreshOnPlay";
+
+		public static bool AutoRefreshOnPlay
+		{
+			get => EditorPrefs.GetBool(AUTO_REFRESH_PREF_KEY, true);
+			set => EditorPrefs.SetBool(AUTO_REFRESH_PREF_KEY, value);
+		}
+
+		[MenuItem("Tools/NestedSO/Auto Refresh On Play")]
+		private static void ToggleAutoRefresh()
+		{
+			AutoRefreshOnPlay = !AutoRefreshOnPlay;
+		}
+
+		[MenuItem("Tools/NestedSO/Auto Refresh On Play", true)]
+		private static bool ToggleAutoRefreshValidate()
+		{
+			Menu.SetChecked("Tools/NestedSO/Auto Refresh On Play", AutoRefreshOnPlay);
+			return true;
+		}
 
 		public void OnPreprocessBuild(BuildReport report)
 		{
@@ -29,7 +50,10 @@ namespace NestedSO.Processor
 		{
 			if (state == PlayModeStateChange.ExitingEditMode)
 			{
-				RefreshAllDatabases();
+				if (AutoRefreshOnPlay)
+				{
+					RefreshAllDatabases();
+				}
 			}
 		}
 
@@ -74,6 +98,8 @@ namespace NestedSO.Processor
 		{
 			string[] guids = AssetDatabase.FindAssets($"t:{nameof(ScriptableObject)}");
 
+			var typeFieldsCache = new Dictionary<Type, FieldInfo[]>();
+
 			for (int i = 0, c = guids.Length; i < c; i++)
 			{
 				string guid = guids[i];
@@ -103,6 +129,52 @@ namespace NestedSO.Processor
 						}
 					}
 				}
+
+				Type soType = _so.GetType();
+				if (!typeFieldsCache.TryGetValue(soType, out var listFields))
+				{
+					// Walk up the inheritance chain to grab all fields, including private inherited ones
+					var fieldsList = new List<FieldInfo>();
+					Type currentType = soType;
+
+					while (currentType != null && currentType != typeof(ScriptableObject))
+					{
+						var fields = currentType.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+						foreach (var f in fields)
+						{
+							if (typeof(NestedSOListBase).IsAssignableFrom(f.FieldType))
+							{
+								fieldsList.Add(f);
+							}
+						}
+						currentType = currentType.BaseType;
+					}
+
+					listFields = fieldsList.ToArray();
+					typeFieldsCache[soType] = listFields;
+				}
+
+				foreach (var field in listFields)
+				{
+					var listWrapper = field.GetValue(_so);
+					if (listWrapper != null)
+					{
+						var itemsField = field.FieldType.GetField("Items");
+						if (itemsField != null)
+						{
+							if (itemsField.GetValue(listWrapper) is System.Collections.IList list)
+							{
+								foreach (var item in list)
+								{
+									if (item is ScriptableObject childSO)
+									{
+										CallMethod(childSO);
+									}
+								}
+							}
+						}
+					}
+				}
 			}
 		}
 
@@ -124,14 +196,12 @@ namespace NestedSO.Processor
 			var tempTagMap = new Dictionary<string, List<int>>();
 			var tempIdMap = new Dictionary<string, int>();
 
-			// Scan the entities by Index
 			for (int i = 0; i < db.SOQueryEntities.Count; i++)
 			{
 				var obj = db.SOQueryEntities[i];
 				if (obj == null) continue;
 				if (obj is not ISOQueryEntity entity) continue;
 
-				// Index ID (Store INT index)
 				if (!string.IsNullOrEmpty(entity.Id))
 				{
 					if (!tempIdMap.ContainsKey(entity.Id))
@@ -150,7 +220,6 @@ namespace NestedSO.Processor
 					}
 				}
 
-				// Index Tags (Store INT index)
 				foreach (var tag in SOQueryDatabase.GetSearchableTags(obj))
 				{
 					if (!tempTagMap.ContainsKey(tag)) tempTagMap[tag] = new List<int>();
@@ -158,7 +227,6 @@ namespace NestedSO.Processor
 				}
 			}
 
-			// Serialize Tag Index
 			foreach (var kvp in tempTagMap)
 			{
 				int index = tagIndexProp.arraySize;
@@ -177,7 +245,6 @@ namespace NestedSO.Processor
 				}
 			}
 
-			// Pre-Calculate Queries
 			foreach (var queryStr in db.PrewarmQueries)
 			{
 				var tags = SOQueryDatabase.ParseTags(queryStr, sort: true);
