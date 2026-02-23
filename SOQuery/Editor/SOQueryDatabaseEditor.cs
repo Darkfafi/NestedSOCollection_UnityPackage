@@ -6,7 +6,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System;
 using System.Reflection;
-using NestedSO;
 using NestedSO.Processor;
 
 namespace NestedSO.SOEditor
@@ -23,9 +22,9 @@ namespace NestedSO.SOEditor
 		private bool _showConfigs = true;
 
 		// --- Tags Explorer State ---
-		private bool _showTagExplorer = false;
 		private string _explorerSearchString = "";
 		private Vector2 _explorerScrollPos;
+		private int _explorerCurrentPage = 0;
 
 		// Data Structures for Analysis
 		private class TagStats
@@ -56,6 +55,7 @@ namespace NestedSO.SOEditor
 
 		// --- Expansion State ---
 		private HashSet<int> _expandedItems = new HashSet<int>();
+		private bool _showRawData = false;
 
 		// --- Pagination ---
 		private int _currentPage = 0;
@@ -69,7 +69,6 @@ namespace NestedSO.SOEditor
 		private GUIStyle _toolbarSearchField;
 		private GUIStyle _toolbarCancelButton;
 		private GUIStyle _badgeContainer, _badgeType, _badgeEditor, _badgeRuntime;
-		private GUIStyle _staleRowStyle;
 
 		private void OnEnable()
 		{
@@ -82,19 +81,42 @@ namespace NestedSO.SOEditor
 			serializedObject.Update();
 			InitializeStyles();
 
+			EditorGUILayout.Space(5);
+			DrawEditorHeaderAndOperations();
+
 			EditorGUILayout.Space(10);
-			DrawEditorHeader();
-
-			EditorGUILayout.Space(5);
-			DrawTagsExplorer();
-
-			EditorGUILayout.Space(5);
 			DrawSearchArea();
 
-			// --- DATABASE OPERATIONS ---
 			EditorGUILayout.Space(10);
-			EditorGUILayout.LabelField("Database Operations", EditorStyles.boldLabel);
+			DrawTagsExplorer();
 
+			EditorGUILayout.Space(10);
+			DrawConfiguration();
+
+			EditorGUILayout.Space(10);
+			DrawRawData();
+
+			serializedObject.ApplyModifiedProperties();
+		}
+
+		// ==================================================================================
+		// HEADER & OPERATIONS
+		// ==================================================================================
+
+		private void DrawEditorHeaderAndOperations()
+		{
+			EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+
+			// Stats Row
+			EditorGUILayout.BeginHorizontal();
+			EditorGUILayout.LabelField($"Database Contains {_db.SOQueryEntities.Count} Entities", EditorStyles.boldLabel);
+			long totalSize = CalculateTotalSize(_db.SOQueryEntities);
+			EditorGUILayout.LabelField($"Memory: {FormatBytes(totalSize)}", EditorStyles.miniLabel, GUILayout.Width(100));
+			EditorGUILayout.EndHorizontal();
+
+			EditorGUILayout.Space(5);
+
+			// Operations Row
 			EditorGUILayout.BeginHorizontal();
 			if (GUILayout.Button(new GUIContent(" Populate List", EditorGUIUtility.IconContent("d_Folder Icon").image), GUILayout.Height(24)))
 			{
@@ -109,17 +131,16 @@ namespace NestedSO.SOEditor
 				EditorUtility.SetDirty(_db);
 				AnalyzeTags();
 			}
-			EditorGUILayout.EndHorizontal();
-
-			// --- HEALTH CHECK ---
-			EditorGUILayout.Space(5);
-			if (GUILayout.Button("Verify Cache", GUILayout.Height(24)))
+			if (GUILayout.Button("Verify IDs & Cache", GUILayout.Height(24)))
 			{
 				RunCacheIntegrityCheck();
 			}
+			EditorGUILayout.EndHorizontal();
 
+			// Validation Results
 			if (!string.IsNullOrEmpty(_cacheValidationResult))
 			{
+				EditorGUILayout.Space(5);
 				EditorGUILayout.HelpBox(_cacheValidationResult, _cacheValidationType);
 
 				if (_hasDuplicateErrors)
@@ -133,20 +154,451 @@ namespace NestedSO.SOEditor
 				}
 			}
 
-			EditorGUILayout.Space(10);
-			EditorGUILayout.LabelField("Raw Data", EditorStyles.boldLabel);
-			SerializedProperty listProp = serializedObject.FindProperty("SOQueryEntities");
-
-			EditorGUI.BeginChangeCheck();
-			EditorGUILayout.PropertyField(listProp, true);
-			if (EditorGUI.EndChangeCheck()) AnalyzeTags();
-
-			EditorGUILayout.Space(10);
-			serializedObject.ApplyModifiedProperties();
+			EditorGUILayout.EndVertical();
 		}
 
 		// ==================================================================================
-		// INTEGRITY & REPAIR LOGIC
+		// QUERY AREA (Playground)
+		// ==================================================================================
+
+		private void DrawSearchArea()
+		{
+			EditorGUILayout.LabelField("Query Playground", EditorStyles.boldLabel);
+			EditorGUILayout.BeginVertical("box");
+
+			EditorGUILayout.BeginHorizontal();
+			EditorGUILayout.LabelField("ID Contains:", GUILayout.Width(75));
+			_idSearchString = EditorGUILayout.TextField(_idSearchString, _toolbarSearchField);
+			if (GUILayout.Button(GUIContent.none, _toolbarCancelButton))
+			{
+				_idSearchString = "";
+				_currentPage = 0;
+				GUI.FocusControl(null);
+			}
+			EditorGUILayout.EndHorizontal();
+
+			EditorGUILayout.Space(2);
+
+			EditorGUILayout.BeginHorizontal();
+			var currentTags = SOQueryDatabase.ParseTags(_searchString);
+			foreach (var tag in currentTags.ToList())
+			{
+				if (GUILayout.Button($"{tag}  ×", _tagPillStyle, GUILayout.Height(20))) RemoveTag(tag);
+			}
+			GUILayout.FlexibleSpace();
+
+			Color c = GUI.backgroundColor; GUI.backgroundColor = new Color(0.7f, 1f, 0.7f);
+			if (GUILayout.Button("+ Add Tag Filter", GUILayout.Width(110), GUILayout.Height(20))) ShowAddFilterDropdown();
+			GUI.backgroundColor = c;
+			EditorGUILayout.EndHorizontal();
+
+			// Calculate Results
+			var liveResults = FilterList(currentTags, _idSearchString);
+			ValidateCacheAgainstLive(currentTags, _idSearchString, liveResults);
+
+			// Draw Cache Status
+			if (_isCacheStale)
+			{
+				EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+				EditorGUILayout.BeginHorizontal();
+				var icon = EditorGUIUtility.IconContent("console.warnicon.sml");
+				GUILayout.Label(icon, GUILayout.Width(20), GUILayout.Height(20));
+
+				GUIStyle redLabel = new GUIStyle(EditorStyles.miniLabel) { normal = { textColor = new Color(1f, 0.4f, 0.4f) }, fontSize = 11, fontStyle = FontStyle.Bold };
+				GUILayout.Label($"Cache Mismatch: {_staleReason}", redLabel);
+
+				if (GUILayout.Button("Fix Now", EditorStyles.miniButton, GUILayout.Width(60)))
+				{
+					SOQueryDatabaseProcessor.BuildCache(_db);
+					EditorUtility.SetDirty(_db);
+					Repaint();
+				}
+				EditorGUILayout.EndHorizontal();
+				EditorGUILayout.EndVertical();
+			}
+			else if (currentTags.Count > 0 || !string.IsNullOrEmpty(_idSearchString))
+			{
+				EditorGUILayout.BeginHorizontal();
+				GUILayout.FlexibleSpace();
+				var icon = EditorGUIUtility.IconContent("TestPassed");
+				if (icon == null) icon = EditorGUIUtility.IconContent("Collab");
+				if (icon != null) GUILayout.Label(icon, GUILayout.Width(16), GUILayout.Height(14));
+				GUILayout.Label("Cache Verified", EditorStyles.miniLabel);
+				EditorGUILayout.EndHorizontal();
+			}
+
+			// Pagination
+			int totalCount = liveResults.Count;
+			int totalPages = Mathf.CeilToInt((float)totalCount / ITEMS_PER_PAGE);
+			if (_currentPage >= totalPages) _currentPage = Mathf.Max(0, totalPages - 1);
+			var pageResults = liveResults.Skip(_currentPage * ITEMS_PER_PAGE).Take(ITEMS_PER_PAGE).ToList();
+
+			EditorGUILayout.Space(5);
+			EditorGUILayout.BeginHorizontal();
+			long subsetSize = CalculateTotalSize(liveResults);
+			GUI.color = Color.cyan;
+			EditorGUILayout.LabelField($"Showing {totalCount} items ({FormatBytes(subsetSize)})", EditorStyles.miniLabel, GUILayout.Width(180));
+			GUI.color = Color.white;
+			GUILayout.FlexibleSpace();
+			if (totalPages > 1)
+			{
+				if (GUILayout.Button("◄", EditorStyles.miniButtonLeft, GUILayout.Width(25))) _currentPage = Mathf.Max(0, _currentPage - 1);
+				GUILayout.Label($"{_currentPage + 1} / {totalPages}", EditorStyles.centeredGreyMiniLabel, GUILayout.Width(50));
+				if (GUILayout.Button("►", EditorStyles.miniButtonRight, GUILayout.Width(25))) _currentPage = Mathf.Min(totalPages - 1, _currentPage + 1);
+			}
+			EditorGUILayout.EndHorizontal();
+
+			// Result List
+			_showConfigs = EditorGUILayout.Foldout(_showConfigs, "Results Preview", true);
+			if (_showConfigs)
+			{
+				_scrollPos = EditorGUILayout.BeginScrollView(_scrollPos, GUILayout.Height(350));
+				foreach (var item in pageResults)
+				{
+					bool isMissingFromCache = !_cachedResultIDs.Contains(item.GetInstanceID());
+					DrawEntityLine(item, isMissingFromCache);
+				}
+				if (pageResults.Count == 0) EditorGUILayout.HelpBox("No items match your filter.", MessageType.Info);
+				EditorGUILayout.EndScrollView();
+			}
+			EditorGUILayout.EndVertical();
+		}
+
+		// ==================================================================================
+		// TAGS EXPLORER (With Pagination)
+		// ==================================================================================
+
+		private void DrawTagsExplorer()
+		{
+			EditorGUILayout.LabelField("Tags Explorer", EditorStyles.boldLabel);
+			EditorGUILayout.BeginVertical("box");
+
+			EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
+
+			EditorGUI.BeginChangeCheck();
+			_explorerSearchString = EditorGUILayout.TextField(_explorerSearchString, _toolbarSearchField, GUILayout.ExpandWidth(true));
+			if (EditorGUI.EndChangeCheck()) { _explorerCurrentPage = 0; } // Reset page on search
+
+			if (!string.IsNullOrEmpty(_explorerSearchString))
+			{
+				if (GUILayout.Button(GUIContent.none, _toolbarCancelButton))
+				{
+					_explorerSearchString = "";
+					_explorerCurrentPage = 0;
+					GUI.FocusControl(null);
+				}
+			}
+
+			EditorGUILayout.Space(10);
+			EditorGUI.BeginChangeCheck();
+
+			_explorerFilter = (TagSourceFilter)EditorGUILayout.EnumFlagsField(GUIContent.none, _explorerFilter, GUILayout.Width(100));
+
+			if (EditorGUI.EndChangeCheck()) { _explorerCurrentPage = 0; } // Reset page on filter change
+
+			EditorGUILayout.EndHorizontal();
+			EditorGUILayout.Space(2);
+
+			var visibleTags = _sortedTags.Where(tag =>
+			{
+				var stats = _tagStats[tag];
+				if (!string.IsNullOrEmpty(_explorerSearchString)) if (tag.IndexOf(_explorerSearchString, StringComparison.OrdinalIgnoreCase) < 0) return false;
+				bool matches = false;
+				if ((_explorerFilter & TagSourceFilter.Container) != 0 && stats.IsContainer) matches = true;
+				if ((_explorerFilter & TagSourceFilter.Type) != 0 && stats.TypeCount > 0) matches = true;
+				if ((_explorerFilter & TagSourceFilter.Editor) != 0 && stats.EditorCount > 0) matches = true;
+				if ((_explorerFilter & TagSourceFilter.Runtime) != 0 && stats.RuntimeCount > 0) matches = true;
+				return matches;
+			}).ToList();
+
+			// --- NEW: Pagination Logic for Tags Explorer ---
+			int totalCount = visibleTags.Count;
+			int totalPages = Mathf.CeilToInt((float)totalCount / ITEMS_PER_PAGE);
+			if (_explorerCurrentPage >= totalPages) _explorerCurrentPage = Mathf.Max(0, totalPages - 1);
+			var pageTags = visibleTags.Skip(_explorerCurrentPage * ITEMS_PER_PAGE).Take(ITEMS_PER_PAGE).ToList();
+
+			EditorGUILayout.BeginHorizontal();
+			EditorGUILayout.LabelField($"Found {totalCount} matching tags", EditorStyles.miniLabel, GUILayout.Width(180));
+			GUILayout.FlexibleSpace();
+			if (totalPages > 1)
+			{
+				if (GUILayout.Button("◄", EditorStyles.miniButtonLeft, GUILayout.Width(25))) _explorerCurrentPage = Mathf.Max(0, _explorerCurrentPage - 1);
+				GUILayout.Label($"{_explorerCurrentPage + 1} / {totalPages}", EditorStyles.centeredGreyMiniLabel, GUILayout.Width(50));
+				if (GUILayout.Button("►", EditorStyles.miniButtonRight, GUILayout.Width(25))) _explorerCurrentPage = Mathf.Min(totalPages - 1, _explorerCurrentPage + 1);
+			}
+			EditorGUILayout.EndHorizontal();
+
+			EditorGUILayout.Space(2);
+
+			if (pageTags.Count > 0)
+			{
+				try
+				{
+					_explorerScrollPos = EditorGUILayout.BeginScrollView(_explorerScrollPos, GUILayout.Height(300));
+				}
+				catch (InvalidCastException) { }
+				foreach (var tag in pageTags) DrawTagExplorerRow(tag, _tagStats[tag]);
+				EditorGUILayout.EndScrollView();
+			}
+			else
+			{
+				EditorGUILayout.HelpBox("No tags match filters.", MessageType.Info);
+			}
+
+			if (GUILayout.Button("Refresh Stats", EditorStyles.miniButton)) AnalyzeTags();
+			EditorGUILayout.EndVertical();
+		}
+
+		private void DrawTagExplorerRow(string tag, TagStats stats)
+		{
+			EditorGUILayout.BeginHorizontal();
+			if (GUILayout.Button(tag, _resultTagButtonStyle, GUILayout.Height(18))) AddTag(tag);
+			GUILayout.FlexibleSpace();
+			if (stats.RuntimeCount > 0) GUILayout.Label(new GUIContent($"R ({stats.RuntimeCount})", "Runtime"), _badgeRuntime, GUILayout.Width(40));
+			if (stats.EditorCount > 0) GUILayout.Label(new GUIContent($"E ({stats.EditorCount})", "Editor"), _badgeEditor, GUILayout.Width(40));
+			if (stats.TypeCount > 0) GUILayout.Label(new GUIContent($"T ({stats.TypeCount})", "Type"), _badgeType, GUILayout.Width(40));
+			if (stats.IsContainer) GUILayout.Label(new GUIContent("C", "Container"), _badgeContainer, GUILayout.Width(20));
+			EditorGUILayout.EndHorizontal();
+		}
+
+		// ==================================================================================
+		// CONFIGURATION & RAW DATA
+		// ==================================================================================
+
+		private void DrawConfiguration()
+		{
+			EditorGUILayout.LabelField("Configuration", EditorStyles.boldLabel);
+			EditorGUILayout.BeginVertical("box");
+
+			EditorGUI.BeginChangeCheck();
+			bool autoRefresh = EditorGUILayout.Toggle("Auto Refresh On Play", SOQueryDatabaseProcessor.AutoRefreshOnPlay);
+			if (EditorGUI.EndChangeCheck())
+			{
+				SOQueryDatabaseProcessor.AutoRefreshOnPlay = autoRefresh;
+			}
+
+			EditorGUILayout.EndVertical();
+		}
+
+		private void DrawRawData()
+		{
+			_showRawData = EditorGUILayout.Foldout(_showRawData, "Raw Data (Advanced)", true);
+			if (_showRawData)
+			{
+				SerializedProperty listProp = serializedObject.FindProperty("SOQueryEntities");
+				EditorGUI.BeginChangeCheck();
+				EditorGUILayout.PropertyField(listProp, true);
+				if (EditorGUI.EndChangeCheck()) AnalyzeTags();
+			}
+		}
+
+		// ==================================================================================
+		// VALIDATION & ENTITY DRAWING
+		// ==================================================================================
+
+		private void ValidateCacheAgainstLive(List<string> tags, string idSearch, List<ScriptableObject> liveResults)
+		{
+			if ((tags == null || tags.Count == 0) && string.IsNullOrEmpty(idSearch))
+			{
+				_isCacheStale = false;
+				_cachedResultIDs.Clear();
+				return;
+			}
+
+			var tagIndexProp = serializedObject.FindProperty("_serializedTagIndex");
+			var queryCacheProp = serializedObject.FindProperty("_serializedQueryCache");
+			var idIndexProp = serializedObject.FindProperty("_serializedIdIndex");
+			var mainListProp = serializedObject.FindProperty("SOQueryEntities");
+
+			HashSet<int> cacheResultInstanceIDs = null;
+
+			if (tags != null && tags.Count > 0)
+			{
+				string key = string.Join("|", tags);
+				bool prewarmFound = false;
+
+				for (int i = 0; i < queryCacheProp.arraySize; i++)
+				{
+					var entry = queryCacheProp.GetArrayElementAtIndex(i);
+					if (entry.FindPropertyRelative("QueryKey").stringValue == key)
+					{
+						cacheResultInstanceIDs = new HashSet<int>();
+						var indices = entry.FindPropertyRelative("ResultIndices");
+
+						for (int k = 0; k < indices.arraySize; k++)
+						{
+							int index = indices.GetArrayElementAtIndex(k).intValue;
+							if (index >= 0 && index < mainListProp.arraySize)
+							{
+								var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
+								if (obj != null) cacheResultInstanceIDs.Add(obj.GetInstanceID());
+							}
+						}
+						prewarmFound = true;
+						break;
+					}
+				}
+
+				if (!prewarmFound)
+				{
+					foreach (var tag in tags)
+					{
+						HashSet<int> currentTagInstanceIDs = new HashSet<int>();
+						bool tagFound = false;
+
+						for (int i = 0; i < tagIndexProp.arraySize; i++)
+						{
+							var entry = tagIndexProp.GetArrayElementAtIndex(i);
+							if (entry.FindPropertyRelative("Tag").stringValue == tag)
+							{
+								var indices = entry.FindPropertyRelative("EntityIndices");
+								for (int k = 0; k < indices.arraySize; k++)
+								{
+									int index = indices.GetArrayElementAtIndex(k).intValue;
+									if (index >= 0 && index < mainListProp.arraySize)
+									{
+										var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
+										if (obj != null) currentTagInstanceIDs.Add(obj.GetInstanceID());
+									}
+								}
+								tagFound = true;
+								break;
+							}
+						}
+
+						if (!tagFound)
+						{
+							cacheResultInstanceIDs = new HashSet<int>();
+							break;
+						}
+
+						if (cacheResultInstanceIDs == null) cacheResultInstanceIDs = currentTagInstanceIDs;
+						else cacheResultInstanceIDs.IntersectWith(currentTagInstanceIDs);
+					}
+				}
+			}
+
+			if (!string.IsNullOrEmpty(idSearch))
+			{
+				HashSet<int> idMatchInstanceIDs = new HashSet<int>();
+				string lowerIdSearch = idSearch.ToLowerInvariant();
+
+				for (int i = 0; i < idIndexProp.arraySize; i++)
+				{
+					var entry = idIndexProp.GetArrayElementAtIndex(i);
+					string cachedId = entry.FindPropertyRelative("Id").stringValue;
+
+					if (cachedId.ToLowerInvariant().Contains(lowerIdSearch))
+					{
+						int index = entry.FindPropertyRelative("EntityIndex").intValue;
+						if (index >= 0 && index < mainListProp.arraySize)
+						{
+							var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
+							if (obj != null) idMatchInstanceIDs.Add(obj.GetInstanceID());
+						}
+					}
+				}
+
+				if (cacheResultInstanceIDs == null) cacheResultInstanceIDs = idMatchInstanceIDs;
+				else cacheResultInstanceIDs.IntersectWith(idMatchInstanceIDs);
+			}
+
+			if (cacheResultInstanceIDs == null) cacheResultInstanceIDs = new HashSet<int>();
+			_cachedResultIDs = cacheResultInstanceIDs;
+
+			if (liveResults.Count != cacheResultInstanceIDs.Count)
+			{
+				_isCacheStale = true;
+				_staleReason = $"Live: {liveResults.Count}, Cache: {cacheResultInstanceIDs.Count}";
+			}
+			else
+			{
+				bool mismatch = false;
+				foreach (var liveItem in liveResults)
+				{
+					if (!_cachedResultIDs.Contains(liveItem.GetInstanceID())) { mismatch = true; break; }
+				}
+				_isCacheStale = mismatch;
+				_staleReason = mismatch ? "Data Mismatch" : "";
+			}
+		}
+
+		private void DrawEntityLine(ScriptableObject obj, bool missingFromCache)
+		{
+			if (obj == null) return;
+			int instanceId = obj.GetInstanceID();
+			bool isExpanded = _expandedItems.Contains(instanceId);
+
+			if (missingFromCache && _isCacheStale) GUI.backgroundColor = new Color(1f, 0.8f, 0.8f);
+
+			EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+			GUI.backgroundColor = Color.white;
+
+			EditorGUILayout.BeginHorizontal();
+
+			bool newExpanded = EditorGUILayout.Foldout(isExpanded, GUIContent.none, true);
+			if (newExpanded != isExpanded) { if (newExpanded) _expandedItems.Add(instanceId); else _expandedItems.Remove(instanceId); }
+
+			using (new EditorGUI.DisabledScope(true))
+			{
+				EditorGUILayout.ObjectField(obj, typeof(ScriptableObject), false, GUILayout.Width(180));
+			}
+
+			if (obj is ISOQueryEntity entity)
+			{
+				long size = Profiler.GetRuntimeMemorySizeLong(obj);
+				EditorGUILayout.LabelField(FormatBytes(size), EditorStyles.miniLabel, GUILayout.Width(45));
+
+				if (missingFromCache && _isCacheStale)
+				{
+					var style = new GUIStyle(EditorStyles.miniLabel) { normal = { textColor = Color.red }, fontStyle = FontStyle.Bold };
+					GUILayout.Label("! NOT IN CACHE", style, GUILayout.Width(100));
+				}
+				else if (!newExpanded)
+				{
+					Type t = obj.GetType();
+					if (!SOQueryDatabase.IsTypeExcluded(t)) if (GUILayout.Button(t.Name, _typeButtonStyle)) AddTag(t.Name);
+					foreach (var tag in entity.Tags.Take(4)) if (GUILayout.Button(tag, _resultTagButtonStyle)) AddTag(tag);
+					if (entity.Tags.Count > 4) GUILayout.Label($"+{entity.Tags.Count - 4}", EditorStyles.miniLabel);
+				}
+			}
+			GUILayout.FlexibleSpace();
+			EditorGUILayout.EndHorizontal();
+
+			if (newExpanded && obj is ISOQueryEntity expandedEntity) DrawExpandedDetails(obj, expandedEntity);
+			EditorGUILayout.EndVertical();
+		}
+
+		private void DrawExpandedDetails(ScriptableObject obj, ISOQueryEntity entity)
+		{
+			var allTags = SOQueryDatabase.GetSearchableTags(obj).ToList();
+			EditorGUILayout.BeginVertical(_expandedBoxStyle);
+
+			EditorGUILayout.BeginHorizontal();
+			EditorGUILayout.LabelField("ID:", EditorStyles.miniBoldLabel, GUILayout.Width(25));
+			EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(entity.Id) ? "[No ID]" : entity.Id, EditorStyles.miniLabel, GUILayout.Height(16));
+			EditorGUILayout.EndHorizontal();
+			EditorGUILayout.Space(2);
+
+			EditorGUILayout.LabelField("All Searchable Tags:", EditorStyles.miniBoldLabel);
+			float width = EditorGUIUtility.currentViewWidth - 60;
+			float currentX = 0;
+			EditorGUILayout.BeginHorizontal();
+			foreach (var tag in allTags)
+			{
+				bool isManual = entity.Tags.Contains(tag);
+				GUIStyle style = isManual ? _resultTagButtonStyle : _typeButtonStyle;
+				float btnWidth = style.CalcSize(new GUIContent(tag)).x;
+				if (currentX + btnWidth > width) { currentX = 0; EditorGUILayout.EndHorizontal(); EditorGUILayout.BeginHorizontal(); }
+				if (GUILayout.Button(tag, style)) AddTag(tag);
+				currentX += btnWidth + 4;
+			}
+			EditorGUILayout.EndHorizontal();
+			EditorGUILayout.EndVertical();
+		}
+
+		// ==================================================================================
+		// INTEGRITY & CACHE HELPERS
 		// ==================================================================================
 
 		private void RunCacheIntegrityCheck()
@@ -277,300 +729,7 @@ namespace NestedSO.SOEditor
 		}
 
 		// ==================================================================================
-		// QUERY AREA (Merged ID and Tag Search)
-		// ==================================================================================
-
-		private void DrawSearchArea()
-		{
-			EditorGUILayout.LabelField("Query Playground", EditorStyles.boldLabel);
-			EditorGUILayout.BeginVertical("box");
-
-			EditorGUILayout.BeginHorizontal();
-			EditorGUILayout.LabelField("ID Contains:", GUILayout.Width(75));
-			_idSearchString = EditorGUILayout.TextField(_idSearchString, _toolbarSearchField);
-			if (GUILayout.Button(GUIContent.none, _toolbarCancelButton))
-			{
-				_idSearchString = "";
-				GUI.FocusControl(null);
-			}
-			EditorGUILayout.EndHorizontal();
-
-			EditorGUILayout.Space(2);
-
-			EditorGUILayout.BeginHorizontal();
-			var currentTags = SOQueryDatabase.ParseTags(_searchString);
-			foreach (var tag in currentTags.ToList())
-			{
-				if (GUILayout.Button($"{tag}  ×", _tagPillStyle, GUILayout.Height(20))) RemoveTag(tag);
-			}
-			GUILayout.FlexibleSpace();
-
-			Color c = GUI.backgroundColor; GUI.backgroundColor = new Color(0.7f, 1f, 0.7f);
-			if (GUILayout.Button("+ Add Tag Filter", GUILayout.Width(110), GUILayout.Height(20))) ShowAddFilterDropdown();
-			GUI.backgroundColor = c;
-			EditorGUILayout.EndHorizontal();
-
-			// Calculate Results
-			var liveResults = FilterList(currentTags, _idSearchString);
-			ValidateCacheAgainstLive(currentTags, _idSearchString, liveResults);
-
-			// Draw Cache Status
-			if (_isCacheStale)
-			{
-				EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-				EditorGUILayout.BeginHorizontal();
-				var icon = EditorGUIUtility.IconContent("console.warnicon.sml");
-				GUILayout.Label(icon, GUILayout.Width(20), GUILayout.Height(20));
-
-				GUIStyle redLabel = new GUIStyle(EditorStyles.miniLabel) { normal = { textColor = new Color(1f, 0.4f, 0.4f) }, fontSize = 11, fontStyle = FontStyle.Bold };
-				GUILayout.Label($"Cache Mismatch: {_staleReason}", redLabel);
-
-				if (GUILayout.Button("Fix Now", EditorStyles.miniButton, GUILayout.Width(60)))
-				{
-					SOQueryDatabaseProcessor.BuildCache(_db);
-					EditorUtility.SetDirty(_db);
-					Repaint();
-				}
-				EditorGUILayout.EndHorizontal();
-				EditorGUILayout.EndVertical();
-			}
-			else if (currentTags.Count > 0 || !string.IsNullOrEmpty(_idSearchString))
-			{
-				EditorGUILayout.BeginHorizontal();
-				GUILayout.FlexibleSpace();
-				var icon = EditorGUIUtility.IconContent("TestPassed");
-				if (icon == null) icon = EditorGUIUtility.IconContent("Collab");
-				if (icon != null) GUILayout.Label(icon, GUILayout.Width(16), GUILayout.Height(14));
-				GUILayout.Label("Cache Verified", EditorStyles.miniLabel);
-				EditorGUILayout.EndHorizontal();
-			}
-
-			// Pagination
-			int totalCount = liveResults.Count;
-			int totalPages = Mathf.CeilToInt((float)totalCount / ITEMS_PER_PAGE);
-			if (_currentPage >= totalPages) _currentPage = Mathf.Max(0, totalPages - 1);
-			var pageResults = liveResults.Skip(_currentPage * ITEMS_PER_PAGE).Take(ITEMS_PER_PAGE).ToList();
-
-			EditorGUILayout.Space(5);
-			EditorGUILayout.BeginHorizontal();
-			long subsetSize = CalculateTotalSize(liveResults);
-			GUI.color = Color.cyan;
-			EditorGUILayout.LabelField($"Showing {totalCount} items ({FormatBytes(subsetSize)})", EditorStyles.miniLabel, GUILayout.Width(180));
-			GUI.color = Color.white;
-			GUILayout.FlexibleSpace();
-			if (totalPages > 1)
-			{
-				if (GUILayout.Button("◄", EditorStyles.miniButtonLeft, GUILayout.Width(25))) _currentPage = Mathf.Max(0, _currentPage - 1);
-				GUILayout.Label($"{_currentPage + 1} / {totalPages}", EditorStyles.centeredGreyMiniLabel, GUILayout.Width(50));
-				if (GUILayout.Button("►", EditorStyles.miniButtonRight, GUILayout.Width(25))) _currentPage = Mathf.Min(totalPages - 1, _currentPage + 1);
-			}
-			EditorGUILayout.EndHorizontal();
-
-			// Result List
-			_showConfigs = EditorGUILayout.Foldout(_showConfigs, "Results Preview", true);
-			if (_showConfigs)
-			{
-				_scrollPos = EditorGUILayout.BeginScrollView(_scrollPos, GUILayout.Height(400));
-				foreach (var item in pageResults)
-				{
-					bool isMissingFromCache = !_cachedResultIDs.Contains(item.GetInstanceID());
-					DrawEntityLine(item, isMissingFromCache);
-				}
-				if (pageResults.Count == 0) EditorGUILayout.HelpBox("No items match your filter.", MessageType.Info);
-				EditorGUILayout.EndScrollView();
-			}
-			EditorGUILayout.EndVertical();
-		}
-
-		private void ValidateCacheAgainstLive(List<string> tags, string idSearch, List<ScriptableObject> liveResults)
-		{
-			if ((tags == null || tags.Count == 0) && string.IsNullOrEmpty(idSearch))
-			{
-				_isCacheStale = false;
-				_cachedResultIDs.Clear();
-				return;
-			}
-
-			var tagIndexProp = serializedObject.FindProperty("_serializedTagIndex");
-			var queryCacheProp = serializedObject.FindProperty("_serializedQueryCache");
-			var idIndexProp = serializedObject.FindProperty("_serializedIdIndex");
-			var mainListProp = serializedObject.FindProperty("SOQueryEntities");
-
-			HashSet<int> cacheResultInstanceIDs = null;
-
-			// 1. Tag Intersections (If applicable)
-			if (tags != null && tags.Count > 0)
-			{
-				string key = string.Join("|", tags);
-				bool prewarmFound = false;
-
-				// A. Check Prewarm
-				for (int i = 0; i < queryCacheProp.arraySize; i++)
-				{
-					var entry = queryCacheProp.GetArrayElementAtIndex(i);
-					if (entry.FindPropertyRelative("QueryKey").stringValue == key)
-					{
-						cacheResultInstanceIDs = new HashSet<int>();
-						var indices = entry.FindPropertyRelative("ResultIndices");
-
-						for (int k = 0; k < indices.arraySize; k++)
-						{
-							int index = indices.GetArrayElementAtIndex(k).intValue;
-							if (index >= 0 && index < mainListProp.arraySize)
-							{
-								var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
-								if (obj != null) cacheResultInstanceIDs.Add(obj.GetInstanceID());
-							}
-						}
-						prewarmFound = true;
-						break;
-					}
-				}
-
-				if (!prewarmFound)
-				{
-					foreach (var tag in tags)
-					{
-						HashSet<int> currentTagInstanceIDs = new HashSet<int>();
-						bool tagFound = false;
-
-						for (int i = 0; i < tagIndexProp.arraySize; i++)
-						{
-							var entry = tagIndexProp.GetArrayElementAtIndex(i);
-							if (entry.FindPropertyRelative("Tag").stringValue == tag)
-							{
-								var indices = entry.FindPropertyRelative("EntityIndices");
-								for (int k = 0; k < indices.arraySize; k++)
-								{
-									int index = indices.GetArrayElementAtIndex(k).intValue;
-									if (index >= 0 && index < mainListProp.arraySize)
-									{
-										var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
-										if (obj != null) currentTagInstanceIDs.Add(obj.GetInstanceID());
-									}
-								}
-								tagFound = true;
-								break;
-							}
-						}
-
-						if (!tagFound)
-						{
-							cacheResultInstanceIDs = new HashSet<int>();
-							break;
-						}
-
-						if (cacheResultInstanceIDs == null) cacheResultInstanceIDs = currentTagInstanceIDs;
-						else cacheResultInstanceIDs.IntersectWith(currentTagInstanceIDs);
-					}
-				}
-			}
-
-			if (!string.IsNullOrEmpty(idSearch))
-			{
-				HashSet<int> idMatchInstanceIDs = new HashSet<int>();
-				string lowerIdSearch = idSearch.ToLowerInvariant();
-
-				// Search through the serialized cache for partial ID matches
-				for (int i = 0; i < idIndexProp.arraySize; i++)
-				{
-					var entry = idIndexProp.GetArrayElementAtIndex(i);
-					string cachedId = entry.FindPropertyRelative("Id").stringValue;
-
-					if (cachedId.ToLowerInvariant().Contains(lowerIdSearch))
-					{
-						int index = entry.FindPropertyRelative("EntityIndex").intValue;
-						if (index >= 0 && index < mainListProp.arraySize)
-						{
-							var obj = mainListProp.GetArrayElementAtIndex(index).objectReferenceValue;
-							if (obj != null) idMatchInstanceIDs.Add(obj.GetInstanceID());
-						}
-					}
-				}
-
-				// Intersect with Tag search if it happened, or assign directly
-				if (cacheResultInstanceIDs == null)
-				{
-					cacheResultInstanceIDs = idMatchInstanceIDs;
-				}
-				else
-				{
-					cacheResultInstanceIDs.IntersectWith(idMatchInstanceIDs);
-				}
-			}
-
-			if (cacheResultInstanceIDs == null) cacheResultInstanceIDs = new HashSet<int>();
-			_cachedResultIDs = cacheResultInstanceIDs;
-
-			// Compare
-			if (liveResults.Count != cacheResultInstanceIDs.Count)
-			{
-				_isCacheStale = true;
-				_staleReason = $"Live: {liveResults.Count}, Cache: {cacheResultInstanceIDs.Count}";
-			}
-			else
-			{
-				bool mismatch = false;
-				foreach (var liveItem in liveResults)
-				{
-					if (!_cachedResultIDs.Contains(liveItem.GetInstanceID())) { mismatch = true; break; }
-				}
-				_isCacheStale = mismatch;
-				_staleReason = mismatch ? "Data Mismatch" : "";
-			}
-		}
-
-		private void DrawEntityLine(ScriptableObject obj, bool missingFromCache)
-		{
-			if (obj == null) return;
-			int instanceId = obj.GetInstanceID();
-			bool isExpanded = _expandedItems.Contains(instanceId);
-
-			if (missingFromCache && _isCacheStale)
-			{
-				GUI.backgroundColor = new Color(1f, 0.8f, 0.8f);
-			}
-
-			EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-			GUI.backgroundColor = Color.white;
-
-			EditorGUILayout.BeginHorizontal();
-
-			bool newExpanded = EditorGUILayout.Foldout(isExpanded, GUIContent.none, true);
-			if (newExpanded != isExpanded) { if (newExpanded) _expandedItems.Add(instanceId); else _expandedItems.Remove(instanceId); }
-
-			using (new EditorGUI.DisabledScope(true))
-			{
-				EditorGUILayout.ObjectField(obj, typeof(ScriptableObject), false, GUILayout.Width(180));
-			}
-
-			if (obj is ISOQueryEntity entity)
-			{
-				long size = Profiler.GetRuntimeMemorySizeLong(obj);
-				EditorGUILayout.LabelField(FormatBytes(size), EditorStyles.miniLabel, GUILayout.Width(45));
-
-				if (missingFromCache && _isCacheStale)
-				{
-					var style = new GUIStyle(EditorStyles.miniLabel) { normal = { textColor = Color.red }, fontStyle = FontStyle.Bold };
-					GUILayout.Label("! NOT IN CACHE", style, GUILayout.Width(100));
-				}
-				else if (!newExpanded)
-				{
-					Type t = obj.GetType();
-					if (!SOQueryDatabase.IsTypeExcluded(t)) if (GUILayout.Button(t.Name, _typeButtonStyle)) AddTag(t.Name);
-					foreach (var tag in entity.Tags.Take(4)) if (GUILayout.Button(tag, _resultTagButtonStyle)) AddTag(tag);
-					if (entity.Tags.Count > 4) GUILayout.Label($"+{entity.Tags.Count - 4}", EditorStyles.miniLabel);
-				}
-			}
-			GUILayout.FlexibleSpace();
-			EditorGUILayout.EndHorizontal();
-
-			if (newExpanded && obj is ISOQueryEntity expandedEntity) DrawExpandedDetails(obj, expandedEntity);
-			EditorGUILayout.EndVertical();
-		}
-
-		// ==================================================================================
-		// REST OF CLASS (Tags Explorer, Headers, Helpers)
+		// MISC UTILITIES
 		// ==================================================================================
 
 		private void AnalyzeTags()
@@ -614,95 +773,6 @@ namespace NestedSO.SOEditor
 			return stats;
 		}
 
-		private void DrawTagsExplorer()
-		{
-			_showTagExplorer = EditorGUILayout.Foldout(_showTagExplorer, "Tags Explorer", true);
-			if (!_showTagExplorer) return;
-
-			EditorGUILayout.BeginVertical("box");
-			EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-
-			EditorGUI.BeginChangeCheck();
-			_explorerSearchString = EditorGUILayout.TextField(_explorerSearchString, _toolbarSearchField, GUILayout.ExpandWidth(true));
-			if (EditorGUI.EndChangeCheck()) { }
-
-			if (!string.IsNullOrEmpty(_explorerSearchString))
-			{
-				if (GUILayout.Button(GUIContent.none, _toolbarCancelButton)) { _explorerSearchString = ""; GUI.FocusControl(null); }
-			}
-
-			EditorGUILayout.Space(10);
-			_explorerFilter = (TagSourceFilter)EditorGUILayout.EnumFlagsField(_explorerFilter, EditorStyles.toolbarDropDown, GUILayout.Width(100));
-			EditorGUILayout.EndHorizontal();
-			EditorGUILayout.Space(2);
-
-			var visibleTags = _sortedTags.Where(tag =>
-			{
-				var stats = _tagStats[tag];
-				if (!string.IsNullOrEmpty(_explorerSearchString)) if (tag.IndexOf(_explorerSearchString, StringComparison.OrdinalIgnoreCase) < 0) return false;
-				bool matches = false;
-				if ((_explorerFilter & TagSourceFilter.Container) != 0 && stats.IsContainer) matches = true;
-				if ((_explorerFilter & TagSourceFilter.Type) != 0 && stats.TypeCount > 0) matches = true;
-				if ((_explorerFilter & TagSourceFilter.Editor) != 0 && stats.EditorCount > 0) matches = true;
-				if ((_explorerFilter & TagSourceFilter.Runtime) != 0 && stats.RuntimeCount > 0) matches = true;
-				return matches;
-			}).ToList();
-
-			EditorGUILayout.LabelField($"Found {visibleTags.Count} matching tags", EditorStyles.miniLabel);
-
-			if (visibleTags.Count > 0)
-			{
-				float height = Mathf.Min(250, visibleTags.Count * 22 + 10);
-				_explorerScrollPos = EditorGUILayout.BeginScrollView(_explorerScrollPos, GUILayout.Height(height));
-				foreach (var tag in visibleTags) DrawTagExplorerRow(tag, _tagStats[tag]);
-				EditorGUILayout.EndScrollView();
-			}
-			else EditorGUILayout.HelpBox("No tags match filters.", MessageType.Info);
-
-			if (GUILayout.Button("Refresh Stats", EditorStyles.miniButton)) AnalyzeTags();
-			EditorGUILayout.EndVertical();
-		}
-
-		private void DrawTagExplorerRow(string tag, TagStats stats)
-		{
-			EditorGUILayout.BeginHorizontal();
-			if (GUILayout.Button(tag, _resultTagButtonStyle, GUILayout.Height(18))) AddTag(tag);
-			GUILayout.FlexibleSpace();
-			if (stats.RuntimeCount > 0) GUILayout.Label(new GUIContent($"R ({stats.RuntimeCount})", "Runtime"), _badgeRuntime, GUILayout.Width(40));
-			if (stats.EditorCount > 0) GUILayout.Label(new GUIContent($"E ({stats.EditorCount})", "Editor"), _badgeEditor, GUILayout.Width(40));
-			if (stats.TypeCount > 0) GUILayout.Label(new GUIContent($"T ({stats.TypeCount})", "Type"), _badgeType, GUILayout.Width(40));
-			if (stats.IsContainer) GUILayout.Label(new GUIContent("C", "Container"), _badgeContainer, GUILayout.Width(20));
-			EditorGUILayout.EndHorizontal();
-		}
-
-		private void DrawExpandedDetails(ScriptableObject obj, ISOQueryEntity entity)
-		{
-			var allTags = SOQueryDatabase.GetSearchableTags(obj).ToList();
-			EditorGUILayout.BeginVertical(_expandedBoxStyle);
-
-			EditorGUILayout.BeginHorizontal();
-			EditorGUILayout.LabelField("ID:", EditorStyles.miniBoldLabel, GUILayout.Width(25));
-			EditorGUILayout.SelectableLabel(string.IsNullOrEmpty(entity.Id) ? "[No ID]" : entity.Id, EditorStyles.miniLabel, GUILayout.Height(16));
-			EditorGUILayout.EndHorizontal();
-			EditorGUILayout.Space(2);
-
-			EditorGUILayout.LabelField("All Searchable Tags:", EditorStyles.miniBoldLabel);
-			float width = EditorGUIUtility.currentViewWidth - 60;
-			float currentX = 0;
-			EditorGUILayout.BeginHorizontal();
-			foreach (var tag in allTags)
-			{
-				bool isManual = entity.Tags.Contains(tag);
-				GUIStyle style = isManual ? _resultTagButtonStyle : _typeButtonStyle;
-				float btnWidth = style.CalcSize(new GUIContent(tag)).x;
-				if (currentX + btnWidth > width) { currentX = 0; EditorGUILayout.EndHorizontal(); EditorGUILayout.BeginHorizontal(); }
-				if (GUILayout.Button(tag, style)) AddTag(tag);
-				currentX += btnWidth + 4;
-			}
-			EditorGUILayout.EndHorizontal();
-			EditorGUILayout.EndVertical();
-		}
-
 		private T GetPrivateField<T>(object target, string fieldName) where T : class
 		{
 			var field = target.GetType().GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
@@ -729,16 +799,6 @@ namespace NestedSO.SOEditor
 			if (_badgeRuntime == null) { _badgeRuntime = new GUIStyle("CN CountBadge") { alignment = TextAnchor.MiddleCenter, fontSize = 9, fixedHeight = 16 }; _badgeRuntime.normal.textColor = EditorGUIUtility.isProSkin ? new Color(1f, 0.8f, 0.4f) : new Color(0.8f, 0.5f, 0.1f); }
 			if (_toolbarSearchField == null) { _toolbarSearchField = GUI.skin.FindStyle("ToolbarSeachTextField") ?? GUI.skin.FindStyle("ToolbarSearchTextField") ?? EditorStyles.toolbarTextField; }
 			if (_toolbarCancelButton == null) { _toolbarCancelButton = GUI.skin.FindStyle("ToolbarSeachCancelButton") ?? GUI.skin.FindStyle("ToolbarSearchCancelButton") ?? GUIStyle.none; }
-			if (_staleRowStyle == null) { _staleRowStyle = new GUIStyle(EditorStyles.helpBox); _staleRowStyle.normal.background = Texture2D.whiteTexture; }
-		}
-
-		private void DrawEditorHeader()
-		{
-			EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-			EditorGUILayout.LabelField($"Database Contains {_db.SOQueryEntities.Count} Entities", EditorStyles.boldLabel);
-			long totalSize = CalculateTotalSize(_db.SOQueryEntities);
-			EditorGUILayout.LabelField($"Total Memory: {FormatBytes(totalSize)}", EditorStyles.miniLabel);
-			EditorGUILayout.EndVertical();
 		}
 
 		public static HashSet<string> GetSOQueryEntityTags(SOQueryDatabase db)
@@ -787,7 +847,7 @@ namespace NestedSO.SOEditor
 					}
 					else
 					{
-						continue; // Drop entities without matching IDs
+						continue;
 					}
 				}
 
