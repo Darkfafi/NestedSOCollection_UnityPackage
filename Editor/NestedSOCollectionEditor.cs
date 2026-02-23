@@ -704,27 +704,47 @@ namespace NestedSO.SOEditor
 			}
 
 			// Reflection to find nested lists inside the item being removed
-			var fields = nestedItem.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-			foreach (var field in fields)
+			var fieldsList = new List<System.Reflection.FieldInfo>();
+			Type currentType = nestedItem.GetType();
+
+			while (currentType != null && currentType != typeof(ScriptableObject) && currentType != typeof(UnityEngine.Object))
 			{
-				if (typeof(NestedSOListBase).IsAssignableFrom(field.FieldType))
+				var declaredFields = currentType.GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly);
+				foreach (var f in declaredFields)
 				{
-					var listWrapper = field.GetValue(nestedItem);
-					if (listWrapper != null)
+					if (typeof(NestedSOListBase).IsAssignableFrom(f.FieldType))
 					{
-						var itemsField = field.FieldType.GetField("Items");
-						if (itemsField != null)
+						fieldsList.Add(f);
+					}
+				}
+				currentType = currentType.BaseType;
+			}
+
+			foreach (var field in fieldsList)
+			{
+				var listWrapper = field.GetValue(nestedItem);
+				if (listWrapper != null)
+				{
+					System.Reflection.FieldInfo itemsField = null;
+					Type searchFieldType = field.FieldType;
+
+					while (searchFieldType != null)
+					{
+						itemsField = searchFieldType.GetField("Items", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly);
+						if (itemsField != null) break;
+						searchFieldType = searchFieldType.BaseType;
+					}
+
+					if (itemsField != null)
+					{
+						if (itemsField.GetValue(listWrapper) is System.Collections.IList list)
 						{
-							var list = itemsField.GetValue(listWrapper) as System.Collections.IList;
-							if (list != null)
+							for (int i = list.Count - 1; i >= 0; i--)
 							{
-								for (int i = list.Count - 1; i >= 0; i--)
+								var child = list[i] as ScriptableObject;
+								if (child != null)
 								{
-									var child = list[i] as ScriptableObject;
-									if (child != null)
-									{
-										RemoveAssetRecursive(collection, child);
-									}
+									RemoveAssetRecursive(collection, child);
 								}
 							}
 						}
