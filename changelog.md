@@ -1,10 +1,25 @@
 # Changelog NestedSOCollection
 
-## v3.0.0 - 12/02/2026
-* `NestedSOList` support
-* Fixed `NestedSOCollectionEditor` Default Drawer not displaying
-
-## v2.0.0 - 12/02/2026
+## v2.0.0 - 18/02/2026
+* `SOQueryDatabase`
+	- When you create the `SOQueryDatabase` through the _NestedSO -> SOQueryDatabase_ Context Menu, you can build the Database by inheriting `SOQueryEntity` (or `ISOQueryEntity`). Through `SOQueryTags`, these can be labelled. And then through `SOQueryDatabase.Find<TargetSO>("Tag1", "Tag2")`, you can query to get a list of TargetSO type matching the given tags. 
+	- This is to decouple one from a Collection, and allows a SO to be connected to multiple contextual relations through Tags. 
+	- You can use`SOQueryTagsContainerAttribute` above a class or enum.
+		- *Class*: Turns all const strings into tags selectable within `SOQueryTags`
+		- *Enum*: Turns all enum names into tags selectable within `SOQueryTags`
+	- Example:
+		- I want all Mission for Emily, then I can do `SOQueryDatabase.Find<MissionConfigSO>("Emily")`
+		- If I only want the main, hard difficulty, but does not matter for who, I can write `SOQueryDatabase.Find<MissionConfigSO>("MAIN", "Hard")`
+* `NestedSOList`
+	- When exposing a property of `NestedSOList`, it allows for Nested SO instances to be made on that `ScriptableObject` within that property. This allows for multiple nested ScriptableObjects within the same target ScriptableObject.
+	- Example: 
+		- TargetSO
+			- NestedSOList<MissionConfigSO>
+				- MissionSO1
+				- MissionSO2
+			- NestedSOList<AgentConfigSO>
+				- AgentSO1
+				- AgentSO2
 * Improved `NestedSOCollectionEditor`
   * Added Search / Filtering of Items + Highlighting for
 	* Name

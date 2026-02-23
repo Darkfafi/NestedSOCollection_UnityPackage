@@ -1,6 +1,7 @@
 ﻿#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using UnityEditor;
 using UnityEditorInternal;
@@ -35,7 +36,6 @@ namespace NestedSO.SOEditor
 
 		private ReorderableList _orderableList;
 		private SerializedProperty _nestedSOsProperty;
-		private GenericMenu _menu = null;
 		private Type _baseType;
 		private string _baseTypeName;
 
@@ -72,26 +72,29 @@ namespace NestedSO.SOEditor
 
 			_baseType = baseType;
 			_baseTypeName = _baseType.Name;
-			_menu = GenericMenuEditorUtils.CreateSOWindow(_baseType, OnItemToCreateSelected);
 
 			_nestedSOsProperty = serializedObject.FindProperty(NestedSOItemsFieldName);
 
-			_orderableList = new ReorderableList(serializedObject, _nestedSOsProperty, true, true, false, false);
+			_orderableList = new ReorderableList(serializedObject, _nestedSOsProperty, true, true, true, true);
 			_orderableList.drawElementCallback = OnDrawListElement;
 			_orderableList.drawHeaderCallback = OnDrawListHeader;
 
+			_orderableList.onAddDropdownCallback = OnAddDropdown;
+			_orderableList.onRemoveCallback = OnRemoveItem;
+
 			EnsureRootIsTarget(targetCollection);
 		}
-		private void EnsureRootIsTarget(UnityEngine.Object target)
+
+		private void EnsureRootIsTarget(UnityEngine.Object targetObj)
 		{
 			if (_breadcrumbs.Count == 0)
 			{
-				_breadcrumbs.Add(target);
+				_breadcrumbs.Add(targetObj);
 			}
-			else if (_breadcrumbs[0] != target)
+			else if (_breadcrumbs[0] != targetObj)
 			{
 				_breadcrumbs.Clear();
-				_breadcrumbs.Add(target);
+				_breadcrumbs.Add(targetObj);
 			}
 		}
 
@@ -122,9 +125,9 @@ namespace NestedSO.SOEditor
 				}
 				else
 				{
-					UnityEngine.Object currentViewItem = (_breadcrumbs.Count > 0) ? _breadcrumbs[_breadcrumbs.Count - 1] : serializedObject.targetObject;
+					UnityEngine.Object currentViewItem = (_breadcrumbs.Count > 0) ? _breadcrumbs[_breadcrumbs.Count - 1] : target;
 
-					if (currentViewItem == serializedObject.targetObject)
+					if (currentViewItem == target)
 					{
 						if (_orderableList != null) _orderableList.DoLayoutList();
 					}
@@ -141,7 +144,17 @@ namespace NestedSO.SOEditor
 
 		protected void OnDisable()
 		{
-			SaveNavigationState();
+			try
+			{
+				if (target != null && !target.Equals(null))
+				{
+					SaveNavigationState();
+				}
+			}
+			catch
+			{
+				// Object was destroyed by Unity during a recompile or deletion, safely ignore.
+			}
 		}
 
 		#endregion
@@ -152,8 +165,8 @@ namespace NestedSO.SOEditor
 		{
 			EditorGUILayout.BeginHorizontal();
 			{
-				UnityEngine.Object currentItem = (_breadcrumbs.Count > 0) ? _breadcrumbs[_breadcrumbs.Count - 1] : serializedObject.targetObject;
-				bool isRoot = currentItem == serializedObject.targetObject;
+				UnityEngine.Object currentItem = (_breadcrumbs.Count > 0) ? _breadcrumbs[_breadcrumbs.Count - 1] : target;
+				bool isRoot = currentItem == target;
 
 				string title = isRoot ? $"{_baseTypeName} Collection" : currentItem.name;
 
@@ -170,14 +183,6 @@ namespace NestedSO.SOEditor
 				}
 
 				GUILayout.Space(5);
-
-				if (isRoot && string.IsNullOrEmpty(_searchString))
-				{
-					if (IconButton("CollabCreate Icon", 20))
-					{
-						_menu.ShowAsContext();
-					}
-				}
 			}
 			EditorGUILayout.EndHorizontal();
 		}
@@ -360,6 +365,10 @@ namespace NestedSO.SOEditor
 			}
 		}
 
+		// =================================================================================================
+		// LIST CALLBACKS
+		// =================================================================================================
+
 		private void OnDrawListHeader(Rect rect)
 		{
 			EditorGUI.LabelField(rect, "Items");
@@ -390,16 +399,54 @@ namespace NestedSO.SOEditor
 			}
 
 			Rect openBtnRect = new Rect(rect.x + rect.width - (btnWidth * 2) - padding, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
-			Rect deleteBtnRect = new Rect(rect.x + rect.width - btnWidth, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
-
 			if (IconButton(openBtnRect, "d_scenepicking_pickable_hover"))
 			{
 				OpenItem(nestedItem);
 			}
 
+			Rect deleteBtnRect = new Rect(rect.x + rect.width - btnWidth, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
 			if (IconButton(deleteBtnRect, "CollabDeleted Icon"))
 			{
-				RemoveAssetFromCollection(serializedObject.targetObject as NestedSOCollectionBase, nestedItem);
+				RemoveAssetFromCollection(target as NestedSOCollectionBase, nestedItem);
+			}
+		}
+
+		private void OnAddDropdown(Rect buttonRect, ReorderableList list)
+		{
+			GenericMenu menu = new GenericMenu();
+
+			var types = TypeCache.GetTypesDerivedFrom(_baseType)
+				.Where(t => !t.IsAbstract && !t.IsInterface)
+				.ToList();
+
+			if (!_baseType.IsAbstract && !_baseType.IsInterface && typeof(ScriptableObject).IsAssignableFrom(_baseType))
+			{
+				if (!types.Contains(_baseType)) types.Insert(0, _baseType);
+			}
+
+			foreach (var t in types)
+			{
+				menu.AddItem(new GUIContent(t.Name), false, () =>
+				{
+					AddAssetToCollection(target as NestedSOCollectionBase, t);
+				});
+			}
+
+			menu.ShowAsContext();
+		}
+
+		private void OnRemoveItem(ReorderableList list)
+		{
+			SerializedProperty element = list.serializedProperty.GetArrayElementAtIndex(list.index);
+			ScriptableObject item = element.objectReferenceValue as ScriptableObject;
+			if (item != null)
+			{
+				RemoveAssetFromCollection(target as NestedSOCollectionBase, item);
+			}
+			else
+			{
+				list.serializedProperty.DeleteArrayElementAtIndex(list.index);
+				serializedObject.ApplyModifiedProperties();
 			}
 		}
 
@@ -461,10 +508,8 @@ namespace NestedSO.SOEditor
 
 				List<string> matchDetails = new List<string>();
 
-				// Check Name
 				bool nameMatch = item.name.ToLowerInvariant().Contains(lowerSearch);
 
-				// Check Type
 				string typeName = item.GetType().Name;
 				bool typeMatch = typeName.ToLowerInvariant().Contains(lowerSearch);
 				if (typeMatch)
@@ -472,7 +517,6 @@ namespace NestedSO.SOEditor
 					matchDetails.Add($"Type: <color=#FFFF00>{typeName}</color>");
 				}
 
-				// Check Properties
 				SerializedObject so = new SerializedObject(item);
 				SerializedProperty iter = so.GetIterator();
 
@@ -513,13 +557,11 @@ namespace NestedSO.SOEditor
 								break;
 						}
 
-						// Value Match
 						if (!string.IsNullOrEmpty(valStr) && valStr.ToLowerInvariant().Contains(lowerSearch))
 						{
 							valMatch = true;
 						}
 
-						// Property Name Match
 						bool propNameMatch = iter.displayName.ToLowerInvariant().Contains(lowerSearch);
 
 						if (valMatch || propNameMatch)
@@ -551,7 +593,6 @@ namespace NestedSO.SOEditor
 				}
 			}
 
-			// Auto-select Mass Edit Property if search matches a property name exactly
 			if (!string.IsNullOrEmpty(_searchString) && _filteredItems.Count > 0)
 			{
 				SerializedObject firstSO = new SerializedObject(_filteredItems[0].Item);
@@ -588,13 +629,6 @@ namespace NestedSO.SOEditor
 				}
 			}
 			AssetDatabase.SaveAssets();
-		}
-
-		private void OnItemToCreateSelected(object userData)
-		{
-			NestedSOCollectionBase collection = serializedObject.targetObject as NestedSOCollectionBase;
-			Type type = userData as Type;
-			AddAssetToCollection(collection, type);
 		}
 
 		#endregion
@@ -669,27 +703,48 @@ namespace NestedSO.SOEditor
 				}
 			}
 
-			var fields = nestedItem.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-			foreach (var field in fields)
+			// Reflection to find nested lists inside the item being removed
+			var fieldsList = new List<System.Reflection.FieldInfo>();
+			Type currentType = nestedItem.GetType();
+
+			while (currentType != null && currentType != typeof(ScriptableObject) && currentType != typeof(UnityEngine.Object))
 			{
-				if (typeof(NestedSOListBase).IsAssignableFrom(field.FieldType))
+				var declaredFields = currentType.GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly);
+				foreach (var f in declaredFields)
 				{
-					var listWrapper = field.GetValue(nestedItem);
-					if (listWrapper != null)
+					if (typeof(NestedSOListBase).IsAssignableFrom(f.FieldType))
 					{
-						var itemsField = field.FieldType.GetField("Items");
-						if (itemsField != null)
+						fieldsList.Add(f);
+					}
+				}
+				currentType = currentType.BaseType;
+			}
+
+			foreach (var field in fieldsList)
+			{
+				var listWrapper = field.GetValue(nestedItem);
+				if (listWrapper != null)
+				{
+					System.Reflection.FieldInfo itemsField = null;
+					Type searchFieldType = field.FieldType;
+
+					while (searchFieldType != null)
+					{
+						itemsField = searchFieldType.GetField("Items", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly);
+						if (itemsField != null) break;
+						searchFieldType = searchFieldType.BaseType;
+					}
+
+					if (itemsField != null)
+					{
+						if (itemsField.GetValue(listWrapper) is System.Collections.IList list)
 						{
-							var list = itemsField.GetValue(listWrapper) as System.Collections.IList;
-							if (list != null)
+							for (int i = list.Count - 1; i >= 0; i--)
 							{
-								for (int i = list.Count - 1; i >= 0; i--)
+								var child = list[i] as ScriptableObject;
+								if (child != null)
 								{
-									var child = list[i] as ScriptableObject;
-									if (child != null)
-									{
-										RemoveAssetRecursive(collection, child);
-									}
+									RemoveAssetRecursive(collection, child);
 								}
 							}
 						}
@@ -711,7 +766,8 @@ namespace NestedSO.SOEditor
 
 		private void SaveNavigationState()
 		{
-			UnityEngine.Object target = serializedObject.targetObject;
+			if (target == null) return;
+
 			string key = $"NestedSOEditor_{target.GetInstanceID()}";
 			StringBuilder dataSB = new StringBuilder();
 			for (int i = 0; i < _breadcrumbs.Count; i++)
@@ -729,9 +785,11 @@ namespace NestedSO.SOEditor
 			EditorPrefs.SetString(key, dataSB.ToString());
 		}
 
-		private void LoadNavigationState(UnityEngine.Object target)
+		private void LoadNavigationState(UnityEngine.Object targetObj)
 		{
-			string key = $"NestedSOEditor_{target.GetInstanceID()}";
+			if (targetObj == null) return;
+
+			string key = $"NestedSOEditor_{targetObj.GetInstanceID()}";
 			if (EditorPrefs.HasKey(key))
 			{
 				string data = EditorPrefs.GetString(key);
@@ -751,11 +809,6 @@ namespace NestedSO.SOEditor
 		private bool IconButton(Rect rect, string icon)
 		{
 			return GUI.Button(rect, EditorGUIUtility.FindTexture(icon), new GUIStyle("label"));
-		}
-
-		private bool IconButton(string icon, float size)
-		{
-			return GUILayout.Button(EditorGUIUtility.FindTexture(icon), new GUIStyle("label"), GUILayout.MaxWidth(size), GUILayout.MaxHeight(size));
 		}
 
 		#endregion
