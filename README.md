@@ -102,7 +102,7 @@ The Database Inspector features a **Query Playground** where you can test tag in
 MissionData level1 = myDatabase.Get<MissionData>("Mission_01");
 
 // Fetch all items matching a set of tags
-List<WeaponData> fireSwords = myDatabase.Find<WeaponData>("Weapon", "Fire", "Legendary");
+List<WeaponData> fireSwords = myDatabase.Find<WeaponData>("Sword", "Fire", "Legendary");
 
 ```
 
