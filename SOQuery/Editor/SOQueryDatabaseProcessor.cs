@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.Build;
@@ -287,3 +288,4 @@ namespace NestedSO.Processor
 		}
 	}
 }
+#endif

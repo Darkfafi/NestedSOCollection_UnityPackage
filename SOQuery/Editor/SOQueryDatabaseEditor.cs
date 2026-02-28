@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using UnityEngine;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
@@ -861,3 +862,4 @@ namespace NestedSO.SOEditor
 		private string FormatBytes(long bytes) { if (bytes < 1024) return $"{bytes} B"; if (bytes < 1024 * 1024) return $"{(bytes / 1024f):F2} KB"; return $"{(bytes / (1024f * 1024f)):F2} MB"; }
 	}
 }
+#endif

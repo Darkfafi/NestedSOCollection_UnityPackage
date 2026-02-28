@@ -1,3 +1,4 @@
+#if UNITY_EDITOR
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
 using System.Collections.Generic;
@@ -45,3 +46,4 @@ namespace NestedSO.SOEditor
 		}
 	}
 }
+#endif
