@@ -47,7 +47,6 @@ namespace NestedSO.SOEditor
 			{
 				EditorGUI.LabelField(new Rect(r.x, r.y, r.width - 120, r.height), "Items");
 
-				// "Search / Details" opens the window at the Root
 				if (GUI.Button(new Rect(r.x + r.width - 110, r.y, 110, r.height), "Search / Details", EditorStyles.miniButton))
 				{
 					NestedSOCollectionWindow.Open(wrapperProp);
@@ -68,7 +67,6 @@ namespace NestedSO.SOEditor
 				string newName = EditorGUI.TextField(new Rect(rect.x, rect.y + 1, nameW, EditorGUIUtility.singleLineHeight), item.name);
 				if (newName != item.name) { item.name = newName; EditorUtility.SetDirty(item); }
 
-				// "Edit" opens the window focused on THIS item
 				if (GUI.Button(new Rect(rect.x + rect.width - btnW, rect.y, btnW, EditorGUIUtility.singleLineHeight), "Edit"))
 				{
 					NestedSOCollectionWindow.OpenItem(wrapperProp, item);
@@ -99,19 +97,20 @@ namespace NestedSO.SOEditor
 			menu.ShowAsContext();
 		}
 
-		private void CreateAndAddAsset(SerializedProperty listProp, Type type)
+		public static ScriptableObject CreateAndAddAsset(SerializedProperty listProp, Type type, string name = null)
 		{
 			ScriptableObject newAsset = ScriptableObject.CreateInstance(type);
-			newAsset.name = "New " + type.Name;
+			newAsset.name = string.IsNullOrEmpty(name) ? "New " + type.Name : name;
 			AssetDatabase.AddObjectToAsset(newAsset, listProp.serializedObject.targetObject);
 			AssetDatabase.SaveAssets();
 			listProp.arraySize++;
 			SerializedProperty element = listProp.GetArrayElementAtIndex(listProp.arraySize - 1);
 			element.objectReferenceValue = newAsset;
 			listProp.serializedObject.ApplyModifiedProperties();
+			return newAsset;
 		}
 
-		private void RemoveItem(SerializedProperty listProp, int index)
+		public static void RemoveItem(SerializedProperty listProp, int index)
 		{
 			SerializedProperty element = listProp.GetArrayElementAtIndex(index);
 			ScriptableObject asset = element.objectReferenceValue as ScriptableObject;
@@ -125,6 +124,42 @@ namespace NestedSO.SOEditor
 			listProp.DeleteArrayElementAtIndex(index);
 
 			listProp.serializedObject.ApplyModifiedProperties();
+			AssetDatabase.SaveAssets();
+		}
+
+		public static T AddAssetToTarget<T>(ScriptableObject parentAsset, NestedSOList<T> listMember, string name = null)
+			where T : ScriptableObject
+		{
+			return AddAssetToTarget(parentAsset, listMember, typeof(T), name) as T;
+		}
+
+		public static ScriptableObject AddAssetToTarget(ScriptableObject parentAsset, NestedSOListBase listMember, Type type, string name = null)
+		{
+			ScriptableObject newAsset = ScriptableObject.CreateInstance(type);
+			newAsset.name = string.IsNullOrEmpty(name) ? "New " + type.Name : name;
+
+			AssetDatabase.AddObjectToAsset(newAsset, parentAsset);
+			listMember.Add(newAsset);
+
+			EditorUtility.SetDirty(parentAsset);
+			EditorUtility.SetDirty(newAsset);
+			AssetDatabase.SaveAssets();
+
+			return newAsset;
+		}
+
+		public static void RemoveAssetFromTarget(ScriptableObject parentAsset, NestedSOListBase listMember, ScriptableObject asset)
+		{
+			if (asset == null) return;
+
+			if (listMember.Contains(asset))
+			{
+				listMember.Remove(asset);
+			}
+
+			NestedSOAssetUtils.DestroyAsset(asset);
+
+			EditorUtility.SetDirty(parentAsset);
 			AssetDatabase.SaveAssets();
 		}
 	}
