@@ -31,7 +31,7 @@ namespace NestedSO
 		{
 			if (string.IsNullOrEmpty(Id))
 			{
-				Id = Guid.NewGuid().ToString();
+				Id = EDITOR_CreateId();
 			}
 
 			_tags.ClearRuntime();
@@ -55,6 +55,11 @@ namespace NestedSO
 		public void EDITOR_SetId(string id)
 		{
 			Id = id;
+		}
+
+		protected virtual string EDITOR_CreateId()
+		{
+			return Guid.NewGuid().ToString();
 		}
 #endif
 
