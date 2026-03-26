@@ -85,24 +85,45 @@ namespace NestedSO.SOEditor
 
 				if (item == null) { EditorGUI.LabelField(rect, "Null"); return; }
 
-				float popBtnW = 35;
 				float btnW = 50;
-				float nameW = rect.width - btnW - popBtnW - 10;
+				float menuBtnW = 24;
+				float nameW = rect.width - btnW - menuBtnW - 5;
 
 				string newName = EditorGUI.TextField(new Rect(rect.x, rect.y + 1, nameW, EditorGUIUtility.singleLineHeight), item.name);
 				if (newName != item.name) { item.name = newName; EditorUtility.SetDirty(item); }
 
-				Rect popBtnRect = new Rect(rect.x + nameW + 5, rect.y, popBtnW, EditorGUIUtility.singleLineHeight);
-				if (GUI.Button(popBtnRect, "Pop"))
-				{
-					PopAssetFromList(item, listProp, index);
-					return;
-				}
-
-				Rect editBtnRect = new Rect(popBtnRect.xMax + 5, rect.y, btnW, EditorGUIUtility.singleLineHeight);
+				Rect editBtnRect = new Rect(rect.x + nameW + 2, rect.y, btnW, EditorGUIUtility.singleLineHeight);
 				if (GUI.Button(editBtnRect, "Edit"))
 				{
 					NestedSOCollectionWindow.OpenItem(wrapperProp, item);
+				}
+
+				Rect menuBtnRect = new Rect(editBtnRect.xMax + 2, rect.y, menuBtnW, EditorGUIUtility.singleLineHeight);
+				GUIContent menuIcon = EditorGUIUtility.IconContent("pane options");
+				if (GUI.Button(menuBtnRect, menuIcon, new GUIStyle("IconButton")))
+				{
+					GenericMenu menu = new GenericMenu();
+
+					// Capture for delayed callback
+					int capturedIndex = index;
+					string propertyPath = listProp.propertyPath;
+					SerializedObject serializedObject = listProp.serializedObject;
+
+					menu.AddItem(new GUIContent("Pop"), false, () =>
+					{
+						serializedObject.Update();
+						var prop = serializedObject.FindProperty(propertyPath);
+						PopAssetFromList(item, prop, capturedIndex);
+					});
+					menu.AddSeparator("");
+					menu.AddItem(new GUIContent("Remove"), false, () =>
+					{
+						serializedObject.Update();
+						var prop = serializedObject.FindProperty(propertyPath);
+						RemoveItem(prop, capturedIndex);
+					});
+
+					menu.ShowAsContext();
 				}
 			};
 
@@ -123,13 +144,7 @@ namespace NestedSO.SOEditor
 
 		private void ShowAddMenu(SerializedProperty listProp)
 		{
-			Type listType = null;
-			if (typeof(NestedSOListBase).IsAssignableFrom(fieldInfo.FieldType))
-			{
-				var itemsField = fieldInfo.FieldType.GetField("Items");
-				if (itemsField != null && itemsField.FieldType.IsGenericType)
-					listType = itemsField.FieldType.GetGenericArguments()[0];
-			}
+			Type listType = GetListType();
 			if (listType == null) return;
 
 			GenericMenu menu = new GenericMenu();
@@ -200,15 +215,11 @@ namespace NestedSO.SOEditor
 				return;
 
 			string oldPath = AssetDatabase.GetAssetPath(externalAsset);
-
-			// Gather nested items from original file BEFORE cloning
 			var nestedAssets = GetNestedAssetsRecursive(externalAsset);
 
-			// Clone the main asset
 			ScriptableObject clonedParent = UnityEngine.Object.Instantiate(externalAsset);
 			clonedParent.name = externalAsset.name;
 
-			// Add cloned parent to target root
 			AssetDatabase.AddObjectToAsset(clonedParent, rootObject);
 
 			listProp.arraySize++;
@@ -216,7 +227,6 @@ namespace NestedSO.SOEditor
 			element.objectReferenceValue = clonedParent;
 			listProp.serializedObject.ApplyModifiedProperties();
 
-			// Safely detach sub-assets from old file and move to new file
 			foreach (var child in nestedAssets)
 			{
 				if (child != null && AssetDatabase.GetAssetPath(child) == oldPath && !AssetDatabase.IsMainAsset(child))
@@ -236,21 +246,16 @@ namespace NestedSO.SOEditor
 			if (string.IsNullOrEmpty(path)) return;
 
 			string oldPath = AssetDatabase.GetAssetPath(subAsset);
-
-			// Gather nested items recursively
 			var nestedAssets = GetNestedAssetsRecursive(subAsset);
 
-			// Remove from the serialized array
 			var element = listProp.GetArrayElementAtIndex(index);
 			element.objectReferenceValue = null;
 			listProp.DeleteArrayElementAtIndex(index);
 			listProp.serializedObject.ApplyModifiedProperties();
 
-			// Strip sub-asset from current hierarchy and build the new file
 			AssetDatabase.RemoveObjectFromAsset(subAsset);
 			AssetDatabase.CreateAsset(subAsset, path);
 
-			// Transfer all nested sub-objects over to the new file safely
 			foreach (var child in nestedAssets)
 			{
 				if (child != null && AssetDatabase.GetAssetPath(child) == oldPath && !AssetDatabase.IsMainAsset(child))

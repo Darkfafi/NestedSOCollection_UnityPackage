@@ -407,10 +407,10 @@ namespace NestedSO.SOEditor
 			}
 
 			string objectName = nestedItem.name;
-			float btnWidth = 24;
-			float popBtnWidth = 35;
+			float editBtnW = 24;
+			float menuBtnW = 24;
 			float padding = 2;
-			float nameWidth = rect.width - (btnWidth * 2) - popBtnWidth - (padding * 3);
+			float nameWidth = rect.width - editBtnW - menuBtnW - (padding * 3);
 
 			string newObjectName = EditorGUI.TextField(new Rect(rect.x, rect.y + 1, nameWidth, EditorGUIUtility.singleLineHeight), objectName);
 			if (objectName != newObjectName)
@@ -420,23 +420,24 @@ namespace NestedSO.SOEditor
 				EditorUtility.SetDirty(nestedItem);
 			}
 
-			Rect popBtnRect = new Rect(rect.x + nameWidth + padding, rect.y, popBtnWidth, EditorGUIUtility.singleLineHeight);
-			if (GUI.Button(popBtnRect, "Pop", EditorStyles.miniButton))
-			{
-				PopAssetFromCollection(target as NestedSOCollectionBase, nestedItem);
-				return;
-			}
-
-			Rect openBtnRect = new Rect(popBtnRect.xMax + padding, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
+			Rect openBtnRect = new Rect(rect.x + nameWidth + padding, rect.y, editBtnW, EditorGUIUtility.singleLineHeight);
 			if (IconButton(openBtnRect, "d_scenepicking_pickable_hover"))
 			{
 				OpenItem(nestedItem);
 			}
 
-			Rect deleteBtnRect = new Rect(openBtnRect.xMax + padding, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
-			if (IconButton(deleteBtnRect, "CollabDeleted Icon"))
+			Rect menuBtnRect = new Rect(openBtnRect.xMax + padding, rect.y, menuBtnW, EditorGUIUtility.singleLineHeight);
+			GUIContent menuIcon = EditorGUIUtility.IconContent("pane options");
+			if (GUI.Button(menuBtnRect, menuIcon, new GUIStyle("IconButton")))
 			{
-				RemoveAssetFromCollection(target as NestedSOCollectionBase, nestedItem);
+				GenericMenu menu = new GenericMenu();
+				NestedSOCollectionBase collection = target as NestedSOCollectionBase;
+
+				menu.AddItem(new GUIContent("Pop"), false, () => PopAssetFromCollection(collection, nestedItem));
+				menu.AddSeparator("");
+				menu.AddItem(new GUIContent("Remove"), false, () => RemoveAssetFromCollection(collection, nestedItem));
+
+				menu.ShowAsContext();
 			}
 		}
 
