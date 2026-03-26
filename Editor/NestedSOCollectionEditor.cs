@@ -366,12 +366,33 @@ namespace NestedSO.SOEditor
 		}
 
 		// =================================================================================================
-		// LIST CALLBACKS
+		// LIST CALLBACKS & PUSH/POP
 		// =================================================================================================
 
 		private void OnDrawListHeader(Rect rect)
 		{
-			EditorGUI.LabelField(rect, "Items");
+			EditorGUI.LabelField(rect, "Items (Drag & Drop external SO here to Push)");
+
+			Event evt = Event.current;
+			if ((evt.type == EventType.DragUpdated || evt.type == EventType.DragPerform) && rect.Contains(evt.mousePosition))
+			{
+				DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+				if (evt.type == EventType.DragPerform)
+				{
+					DragAndDrop.AcceptDrag();
+					foreach (var obj in DragAndDrop.objectReferences)
+					{
+						if (obj is ScriptableObject so && AssetDatabase.IsMainAsset(so))
+						{
+							if (_baseType == null || _baseType.IsAssignableFrom(so.GetType()))
+							{
+								PushAssetToCollection(target as NestedSOCollectionBase, so);
+							}
+						}
+					}
+				}
+				evt.Use();
+			}
 		}
 
 		private void OnDrawListElement(Rect rect, int index, bool isActive, bool isFocused)
@@ -387,8 +408,9 @@ namespace NestedSO.SOEditor
 
 			string objectName = nestedItem.name;
 			float btnWidth = 24;
+			float popBtnWidth = 35;
 			float padding = 2;
-			float nameWidth = rect.width - (btnWidth * 2) - (padding * 2);
+			float nameWidth = rect.width - (btnWidth * 2) - popBtnWidth - (padding * 3);
 
 			string newObjectName = EditorGUI.TextField(new Rect(rect.x, rect.y + 1, nameWidth, EditorGUIUtility.singleLineHeight), objectName);
 			if (objectName != newObjectName)
@@ -398,13 +420,20 @@ namespace NestedSO.SOEditor
 				EditorUtility.SetDirty(nestedItem);
 			}
 
-			Rect openBtnRect = new Rect(rect.x + rect.width - (btnWidth * 2) - padding, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
+			Rect popBtnRect = new Rect(rect.x + nameWidth + padding, rect.y, popBtnWidth, EditorGUIUtility.singleLineHeight);
+			if (GUI.Button(popBtnRect, "Pop", EditorStyles.miniButton))
+			{
+				PopAssetFromCollection(target as NestedSOCollectionBase, nestedItem);
+				return;
+			}
+
+			Rect openBtnRect = new Rect(popBtnRect.xMax + padding, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
 			if (IconButton(openBtnRect, "d_scenepicking_pickable_hover"))
 			{
 				OpenItem(nestedItem);
 			}
 
-			Rect deleteBtnRect = new Rect(rect.x + rect.width - btnWidth, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
+			Rect deleteBtnRect = new Rect(openBtnRect.xMax + padding, rect.y, btnWidth, EditorGUIUtility.singleLineHeight);
 			if (IconButton(deleteBtnRect, "CollabDeleted Icon"))
 			{
 				RemoveAssetFromCollection(target as NestedSOCollectionBase, nestedItem);
@@ -635,6 +664,121 @@ namespace NestedSO.SOEditor
 
 		#region Static Public API
 
+		private static List<ScriptableObject> GetNestedAssetsRecursive(ScriptableObject root)
+		{
+			var result = new List<ScriptableObject>();
+			if (root == null) return result;
+
+			if (root is NestedSOCollectionBase internalCollection)
+			{
+				var items = internalCollection.GetRawItems();
+				for (int i = items.Count - 1; i >= 0; i--)
+				{
+					if (items[i] != null)
+					{
+						result.Add(items[i]);
+						result.AddRange(GetNestedAssetsRecursive(items[i]));
+					}
+				}
+			}
+
+			var fields = root.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+			foreach (var field in fields)
+			{
+				if (typeof(NestedSOListBase).IsAssignableFrom(field.FieldType))
+				{
+					var listWrapper = field.GetValue(root);
+					if (listWrapper != null)
+					{
+						var itemsField = field.FieldType.GetField("Items");
+						if (itemsField != null)
+						{
+							var list = itemsField.GetValue(listWrapper) as System.Collections.IList;
+							if (list != null)
+							{
+								for (int i = list.Count - 1; i >= 0; i--)
+								{
+									var child = list[i] as ScriptableObject;
+									if (child != null)
+									{
+										result.Add(child);
+										result.AddRange(GetNestedAssetsRecursive(child));
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			return result.Distinct().ToList();
+		}
+
+		public static void PushAssetToCollection(NestedSOCollectionBase collection, ScriptableObject externalAsset)
+		{
+			if (!EditorUtility.DisplayDialog("Push Asset", $"Merging '{externalAsset.name}' into this collection will delete the standalone file.\n\nContinue?", "Yes, Push It", "Cancel"))
+				return;
+
+			string oldPath = AssetDatabase.GetAssetPath(externalAsset);
+
+			// Gather nested items from original file BEFORE cloning
+			var nestedAssets = GetNestedAssetsRecursive(externalAsset);
+
+			// Clone the parent asset
+			ScriptableObject clonedParent = UnityEngine.Object.Instantiate(externalAsset);
+			clonedParent.name = externalAsset.name;
+
+			// Add parent
+			collection._AddAsset(clonedParent);
+			AssetDatabase.AddObjectToAsset(clonedParent, collection);
+			collection._MarkAsAddedAsset(clonedParent);
+
+			// Safely detach sub-assets from old file and move to new file
+			foreach (var child in nestedAssets)
+			{
+				if (child != null && AssetDatabase.GetAssetPath(child) == oldPath && !AssetDatabase.IsMainAsset(child))
+				{
+					AssetDatabase.RemoveObjectFromAsset(child);
+					AssetDatabase.AddObjectToAsset(child, collection);
+				}
+			}
+
+			AssetDatabase.DeleteAsset(oldPath);
+			AssetDatabase.SaveAssets();
+			EditorUtility.SetDirty(collection);
+		}
+
+		public static void PopAssetFromCollection(NestedSOCollectionBase collection, ScriptableObject subAsset)
+		{
+			string path = EditorUtility.SaveFilePanelInProject("Pop Asset", subAsset.name, "asset", "Choose location to extract to.");
+			if (string.IsNullOrEmpty(path)) return;
+
+			string oldPath = AssetDatabase.GetAssetPath(subAsset);
+
+			// Gather nested items recursively
+			var nestedAssets = GetNestedAssetsRecursive(subAsset);
+
+			// Remove parent from collection and logic
+			collection._RemoveAsset(subAsset);
+			collection._MarkAsRemovedAsset(subAsset);
+			AssetDatabase.RemoveObjectFromAsset(subAsset);
+
+			// Create new isolated asset
+			AssetDatabase.CreateAsset(subAsset, path);
+
+			// Map all nested items to the new parent container safely
+			foreach (var child in nestedAssets)
+			{
+				if (child != null && AssetDatabase.GetAssetPath(child) == oldPath && !AssetDatabase.IsMainAsset(child))
+				{
+					AssetDatabase.RemoveObjectFromAsset(child);
+					AssetDatabase.AddObjectToAsset(child, subAsset);
+				}
+			}
+
+			AssetDatabase.SaveAssets();
+			EditorUtility.SetDirty(collection);
+		}
+
 		public static void RemoveAssetFromCollection(NestedSOCollectionBase collection, ScriptableObject asset)
 		{
 			if (!collection._HasAsset(asset)) throw new Exception($"Collection {collection} does not contains asset {asset}");
@@ -704,47 +848,27 @@ namespace NestedSO.SOEditor
 			}
 
 			// Reflection to find nested lists inside the item being removed
-			var fieldsList = new List<System.Reflection.FieldInfo>();
-			Type currentType = nestedItem.GetType();
-
-			while (currentType != null && currentType != typeof(ScriptableObject) && currentType != typeof(UnityEngine.Object))
+			var fields = nestedItem.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+			foreach (var field in fields)
 			{
-				var declaredFields = currentType.GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly);
-				foreach (var f in declaredFields)
+				if (typeof(NestedSOListBase).IsAssignableFrom(field.FieldType))
 				{
-					if (typeof(NestedSOListBase).IsAssignableFrom(f.FieldType))
+					var listWrapper = field.GetValue(nestedItem);
+					if (listWrapper != null)
 					{
-						fieldsList.Add(f);
-					}
-				}
-				currentType = currentType.BaseType;
-			}
-
-			foreach (var field in fieldsList)
-			{
-				var listWrapper = field.GetValue(nestedItem);
-				if (listWrapper != null)
-				{
-					System.Reflection.FieldInfo itemsField = null;
-					Type searchFieldType = field.FieldType;
-
-					while (searchFieldType != null)
-					{
-						itemsField = searchFieldType.GetField("Items", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly);
-						if (itemsField != null) break;
-						searchFieldType = searchFieldType.BaseType;
-					}
-
-					if (itemsField != null)
-					{
-						if (itemsField.GetValue(listWrapper) is System.Collections.IList list)
+						var itemsField = field.FieldType.GetField("Items");
+						if (itemsField != null)
 						{
-							for (int i = list.Count - 1; i >= 0; i--)
+							var list = itemsField.GetValue(listWrapper) as System.Collections.IList;
+							if (list != null)
 							{
-								var child = list[i] as ScriptableObject;
-								if (child != null)
+								for (int i = list.Count - 1; i >= 0; i--)
 								{
-									RemoveAssetRecursive(collection, child);
+									var child = list[i] as ScriptableObject;
+									if (child != null)
+									{
+										RemoveAssetRecursive(collection, child);
+									}
 								}
 							}
 						}

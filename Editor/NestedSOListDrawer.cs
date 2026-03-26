@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using UnityEditor;
 using UnityEditorInternal;
@@ -45,11 +46,34 @@ namespace NestedSO.SOEditor
 
 			_list.drawHeaderCallback = (Rect r) =>
 			{
-				EditorGUI.LabelField(new Rect(r.x, r.y, r.width - 120, r.height), "Items");
+				EditorGUI.LabelField(new Rect(r.x, r.y, r.width - 120, r.height), "Items (Drag & Drop to Push)");
 
 				if (GUI.Button(new Rect(r.x + r.width - 110, r.y, 110, r.height), "Search / Details", EditorStyles.miniButton))
 				{
 					NestedSOCollectionWindow.Open(wrapperProp);
+				}
+
+				// Handle Drag & Drop Pushing
+				Event evt = Event.current;
+				if ((evt.type == EventType.DragUpdated || evt.type == EventType.DragPerform) && r.Contains(evt.mousePosition))
+				{
+					DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+					if (evt.type == EventType.DragPerform)
+					{
+						DragAndDrop.AcceptDrag();
+						Type listType = GetListType();
+						foreach (var obj in DragAndDrop.objectReferences)
+						{
+							if (obj is ScriptableObject so && AssetDatabase.IsMainAsset(so))
+							{
+								if (listType == null || listType.IsAssignableFrom(so.GetType()))
+								{
+									PushAssetToList(so, listProp, wrapperProp.serializedObject.targetObject);
+								}
+							}
+						}
+					}
+					evt.Use();
 				}
 			};
 
@@ -61,13 +85,22 @@ namespace NestedSO.SOEditor
 
 				if (item == null) { EditorGUI.LabelField(rect, "Null"); return; }
 
+				float popBtnW = 35;
 				float btnW = 50;
-				float nameW = rect.width - btnW - 5;
+				float nameW = rect.width - btnW - popBtnW - 10;
 
 				string newName = EditorGUI.TextField(new Rect(rect.x, rect.y + 1, nameW, EditorGUIUtility.singleLineHeight), item.name);
 				if (newName != item.name) { item.name = newName; EditorUtility.SetDirty(item); }
 
-				if (GUI.Button(new Rect(rect.x + rect.width - btnW, rect.y, btnW, EditorGUIUtility.singleLineHeight), "Edit"))
+				Rect popBtnRect = new Rect(rect.x + nameW + 5, rect.y, popBtnW, EditorGUIUtility.singleLineHeight);
+				if (GUI.Button(popBtnRect, "Pop"))
+				{
+					PopAssetFromList(item, listProp, index);
+					return;
+				}
+
+				Rect editBtnRect = new Rect(popBtnRect.xMax + 5, rect.y, btnW, EditorGUIUtility.singleLineHeight);
+				if (GUI.Button(editBtnRect, "Edit"))
 				{
 					NestedSOCollectionWindow.OpenItem(wrapperProp, item);
 				}
@@ -75,6 +108,17 @@ namespace NestedSO.SOEditor
 
 			_list.onAddDropdownCallback = (Rect r, ReorderableList l) => ShowAddMenu(listProp);
 			_list.onRemoveCallback = (ReorderableList l) => RemoveItem(listProp, l.index);
+		}
+
+		private Type GetListType()
+		{
+			if (typeof(NestedSOListBase).IsAssignableFrom(fieldInfo.FieldType))
+			{
+				var itemsField = fieldInfo.FieldType.GetField("Items");
+				if (itemsField != null && itemsField.FieldType.IsGenericType)
+					return itemsField.FieldType.GetGenericArguments()[0];
+			}
+			return null;
 		}
 
 		private void ShowAddMenu(SerializedProperty listProp)
@@ -96,6 +140,132 @@ namespace NestedSO.SOEditor
 			foreach (var t in types) menu.AddItem(new GUIContent(t.Name), false, () => CreateAndAddAsset(listProp, t));
 			menu.ShowAsContext();
 		}
+
+		// =================================================================================================
+		// PUSH & POP LOGIC
+		// =================================================================================================
+
+		private static List<ScriptableObject> GetNestedAssetsRecursive(ScriptableObject root)
+		{
+			var result = new List<ScriptableObject>();
+			if (root == null) return result;
+
+			if (root is NestedSOCollectionBase internalCollection)
+			{
+				var items = internalCollection.GetRawItems();
+				for (int i = items.Count - 1; i >= 0; i--)
+				{
+					if (items[i] != null)
+					{
+						result.Add(items[i]);
+						result.AddRange(GetNestedAssetsRecursive(items[i]));
+					}
+				}
+			}
+
+			var fields = root.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+			foreach (var field in fields)
+			{
+				if (typeof(NestedSOListBase).IsAssignableFrom(field.FieldType))
+				{
+					var listWrapper = field.GetValue(root);
+					if (listWrapper != null)
+					{
+						var itemsField = field.FieldType.GetField("Items");
+						if (itemsField != null)
+						{
+							var list = itemsField.GetValue(listWrapper) as System.Collections.IList;
+							if (list != null)
+							{
+								for (int i = list.Count - 1; i >= 0; i--)
+								{
+									var child = list[i] as ScriptableObject;
+									if (child != null)
+									{
+										result.Add(child);
+										result.AddRange(GetNestedAssetsRecursive(child));
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			return result.Distinct().ToList();
+		}
+
+		private void PushAssetToList(ScriptableObject externalAsset, SerializedProperty listProp, UnityEngine.Object rootObject)
+		{
+			if (!EditorUtility.DisplayDialog("Push Asset", $"Merging '{externalAsset.name}' into this list will delete the standalone file.\n\nContinue?", "Yes, Push It", "Cancel"))
+				return;
+
+			string oldPath = AssetDatabase.GetAssetPath(externalAsset);
+
+			// Gather nested items from original file BEFORE cloning
+			var nestedAssets = GetNestedAssetsRecursive(externalAsset);
+
+			// Clone the main asset
+			ScriptableObject clonedParent = UnityEngine.Object.Instantiate(externalAsset);
+			clonedParent.name = externalAsset.name;
+
+			// Add cloned parent to target root
+			AssetDatabase.AddObjectToAsset(clonedParent, rootObject);
+
+			listProp.arraySize++;
+			var element = listProp.GetArrayElementAtIndex(listProp.arraySize - 1);
+			element.objectReferenceValue = clonedParent;
+			listProp.serializedObject.ApplyModifiedProperties();
+
+			// Safely detach sub-assets from old file and move to new file
+			foreach (var child in nestedAssets)
+			{
+				if (child != null && AssetDatabase.GetAssetPath(child) == oldPath && !AssetDatabase.IsMainAsset(child))
+				{
+					AssetDatabase.RemoveObjectFromAsset(child);
+					AssetDatabase.AddObjectToAsset(child, rootObject);
+				}
+			}
+
+			AssetDatabase.DeleteAsset(oldPath);
+			AssetDatabase.SaveAssets();
+		}
+
+		private void PopAssetFromList(ScriptableObject subAsset, SerializedProperty listProp, int index)
+		{
+			string path = EditorUtility.SaveFilePanelInProject("Pop Asset", subAsset.name, "asset", "Choose location to extract to.");
+			if (string.IsNullOrEmpty(path)) return;
+
+			string oldPath = AssetDatabase.GetAssetPath(subAsset);
+
+			// Gather nested items recursively
+			var nestedAssets = GetNestedAssetsRecursive(subAsset);
+
+			// Remove from the serialized array
+			var element = listProp.GetArrayElementAtIndex(index);
+			element.objectReferenceValue = null;
+			listProp.DeleteArrayElementAtIndex(index);
+			listProp.serializedObject.ApplyModifiedProperties();
+
+			// Strip sub-asset from current hierarchy and build the new file
+			AssetDatabase.RemoveObjectFromAsset(subAsset);
+			AssetDatabase.CreateAsset(subAsset, path);
+
+			// Transfer all nested sub-objects over to the new file safely
+			foreach (var child in nestedAssets)
+			{
+				if (child != null && AssetDatabase.GetAssetPath(child) == oldPath && !AssetDatabase.IsMainAsset(child))
+				{
+					AssetDatabase.RemoveObjectFromAsset(child);
+					AssetDatabase.AddObjectToAsset(child, subAsset);
+				}
+			}
+
+			AssetDatabase.SaveAssets();
+		}
+
+		// =================================================================================================
+		// STATIC PUBLIC API
+		// =================================================================================================
 
 		public static ScriptableObject CreateAndAddAsset(SerializedProperty listProp, Type type, string name = null)
 		{
