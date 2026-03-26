@@ -85,14 +85,14 @@ namespace NestedSO.SOEditor
 
 				if (item == null) { EditorGUI.LabelField(rect, "Null"); return; }
 
-				float btnW = 50;
+				float editBtnW = 50;
 				float menuBtnW = 24;
-				float nameW = rect.width - btnW - menuBtnW - 5;
+				float nameW = rect.width - editBtnW - menuBtnW - 5;
 
 				string newName = EditorGUI.TextField(new Rect(rect.x, rect.y + 1, nameW, EditorGUIUtility.singleLineHeight), item.name);
 				if (newName != item.name) { item.name = newName; EditorUtility.SetDirty(item); }
 
-				Rect editBtnRect = new Rect(rect.x + nameW + 2, rect.y, btnW, EditorGUIUtility.singleLineHeight);
+				Rect editBtnRect = new Rect(rect.x + nameW + 2, rect.y, editBtnW, EditorGUIUtility.singleLineHeight);
 				if (GUI.Button(editBtnRect, "Edit"))
 				{
 					NestedSOCollectionWindow.OpenItem(wrapperProp, item);
@@ -104,7 +104,6 @@ namespace NestedSO.SOEditor
 				{
 					GenericMenu menu = new GenericMenu();
 
-					// Capture for delayed callback
 					int capturedIndex = index;
 					string propertyPath = listProp.propertyPath;
 					SerializedObject serializedObject = listProp.serializedObject;
@@ -178,28 +177,49 @@ namespace NestedSO.SOEditor
 				}
 			}
 
-			var fields = root.GetType().GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
-			foreach (var field in fields)
+			// Inheritance-Supported Reflection
+			var fieldsList = new List<System.Reflection.FieldInfo>();
+			Type currentType = root.GetType();
+
+			while (currentType != null && currentType != typeof(ScriptableObject) && currentType != typeof(UnityEngine.Object))
 			{
-				if (typeof(NestedSOListBase).IsAssignableFrom(field.FieldType))
+				var declaredFields = currentType.GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly);
+				foreach (var f in declaredFields)
 				{
-					var listWrapper = field.GetValue(root);
-					if (listWrapper != null)
+					if (typeof(NestedSOListBase).IsAssignableFrom(f.FieldType))
 					{
-						var itemsField = field.FieldType.GetField("Items");
-						if (itemsField != null)
+						fieldsList.Add(f);
+					}
+				}
+				currentType = currentType.BaseType;
+			}
+
+			foreach (var field in fieldsList)
+			{
+				var listWrapper = field.GetValue(root);
+				if (listWrapper != null)
+				{
+					System.Reflection.FieldInfo itemsField = null;
+					Type searchFieldType = field.FieldType;
+
+					while (searchFieldType != null)
+					{
+						itemsField = searchFieldType.GetField("Items", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly);
+						if (itemsField != null) break;
+						searchFieldType = searchFieldType.BaseType;
+					}
+
+					if (itemsField != null)
+					{
+						if (itemsField.GetValue(listWrapper) is System.Collections.IList list)
 						{
-							var list = itemsField.GetValue(listWrapper) as System.Collections.IList;
-							if (list != null)
+							for (int i = list.Count - 1; i >= 0; i--)
 							{
-								for (int i = list.Count - 1; i >= 0; i--)
+								var child = list[i] as ScriptableObject;
+								if (child != null)
 								{
-									var child = list[i] as ScriptableObject;
-									if (child != null)
-									{
-										result.Add(child);
-										result.AddRange(GetNestedAssetsRecursive(child));
-									}
+									result.Add(child);
+									result.AddRange(GetNestedAssetsRecursive(child));
 								}
 							}
 						}
