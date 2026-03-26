@@ -327,6 +327,26 @@ namespace NestedSO.SOEditor
 				return;
 			}
 
+			// --- BULK POP HEADER ---
+			EditorGUILayout.BeginHorizontal();
+			GUILayout.Label($"Results: {_filteredItems.Count}", EditorStyles.boldLabel);
+			GUILayout.FlexibleSpace();
+			if (GUILayout.Button("Pop Range", GUILayout.Width(150)))
+			{
+				NestedSOCollectionBase collection = target as NestedSOCollectionBase;
+				List<ScriptableObject> itemsToPop = _filteredItems.Select(x => x.Item).ToList();
+
+				BulkPopAssetsFromCollection(collection, itemsToPop);
+
+				_searchString = "";
+				_filteredItems.Clear();
+				GUI.FocusControl(null);
+				GUIUtility.ExitGUI(); // Safely exit the layout loop
+			}
+			EditorGUILayout.EndHorizontal();
+			EditorGUILayout.Space(5);
+			// -----------------------
+
 			GUIStyle highlightStyle = new GUIStyle(EditorStyles.miniLabel);
 			highlightStyle.richText = true;
 			highlightStyle.normal.textColor = new Color(0.8f, 0.8f, 0.8f, 1f);
@@ -799,6 +819,59 @@ namespace NestedSO.SOEditor
 
 			AssetDatabase.SaveAssets();
 			EditorUtility.SetDirty(collection);
+		}
+
+		public static void BulkPopAssetsFromCollection(NestedSOCollectionBase collection, List<ScriptableObject> subAssets)
+		{
+			if (subAssets == null || subAssets.Count == 0) return;
+
+			string absolutePath = EditorUtility.OpenFolderPanel("Select Export Folder", "Assets", "");
+			if (string.IsNullOrEmpty(absolutePath)) return;
+
+			if (!absolutePath.StartsWith(Application.dataPath))
+			{
+				EditorUtility.DisplayDialog("Invalid Folder", "The selected folder must be inside the project's Assets directory.", "OK");
+				return;
+			}
+
+			string relativePath = "Assets" + absolutePath.Substring(Application.dataPath.Length);
+
+			try
+			{
+				for (int i = 0; i < subAssets.Count; i++)
+				{
+					ScriptableObject subAsset = subAssets[i];
+					if (subAsset == null) continue;
+
+					EditorUtility.DisplayProgressBar("Popping Range", $"Extracting {subAsset.name}...", (float)i / subAssets.Count);
+
+					string assetPath = AssetDatabase.GenerateUniqueAssetPath($"{relativePath}/{subAsset.name}.asset");
+					string oldPath = AssetDatabase.GetAssetPath(subAsset);
+
+					var nestedAssets = GetNestedAssetsRecursive(subAsset);
+
+					collection._RemoveAsset(subAsset);
+					collection._MarkAsRemovedAsset(subAsset);
+					AssetDatabase.RemoveObjectFromAsset(subAsset);
+
+					AssetDatabase.CreateAsset(subAsset, assetPath);
+
+					foreach (var child in nestedAssets)
+					{
+						if (child != null && AssetDatabase.GetAssetPath(child) == oldPath && !AssetDatabase.IsMainAsset(child))
+						{
+							AssetDatabase.RemoveObjectFromAsset(child);
+							AssetDatabase.AddObjectToAsset(child, subAsset);
+						}
+					}
+				}
+			}
+			finally
+			{
+				EditorUtility.ClearProgressBar();
+				AssetDatabase.SaveAssets();
+				EditorUtility.SetDirty(collection);
+			}
 		}
 
 		public static void RemoveAssetFromCollection(NestedSOCollectionBase collection, ScriptableObject asset)
