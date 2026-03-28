@@ -46,14 +46,36 @@ namespace NestedSO.SOEditor
 
 			_list.drawHeaderCallback = (Rect r) =>
 			{
-				EditorGUI.LabelField(new Rect(r.x, r.y, r.width - 120, r.height), "Items (Drag & Drop to Push)");
+				float bulkPopBtnW = 70;
+				EditorGUI.LabelField(new Rect(r.x, r.y, r.width - bulkPopBtnW - 10, r.height), "Items (Drag & Drop to Push)");
 
-				if (GUI.Button(new Rect(r.x + r.width - 110, r.y, 110, r.height), "Search / Details", EditorStyles.miniButton))
+				Rect bulkPopRect = new Rect(r.x + r.width - bulkPopBtnW, r.y, bulkPopBtnW, r.height);
+				if (GUI.Button(bulkPopRect, "Pop Range", EditorStyles.miniButton))
 				{
-					NestedSOCollectionWindow.Open(wrapperProp);
+					List<ScriptableObject> itemsToPop = new List<ScriptableObject>();
+					for (int i = 0; i < listProp.arraySize; i++)
+					{
+						var obj = listProp.GetArrayElementAtIndex(i).objectReferenceValue as ScriptableObject;
+						if (obj != null) itemsToPop.Add(obj);
+					}
+
+					NestedSOEditorUtils.PopRangeSubAssets(itemsToPop, (poppedAsset) =>
+					{
+						for (int j = listProp.arraySize - 1; j >= 0; j--)
+						{
+							if (listProp.GetArrayElementAtIndex(j).objectReferenceValue == poppedAsset)
+							{
+								listProp.GetArrayElementAtIndex(j).objectReferenceValue = null;
+								listProp.DeleteArrayElementAtIndex(j);
+								break;
+							}
+						}
+						listProp.serializedObject.ApplyModifiedProperties();
+					});
+
+					GUIUtility.ExitGUI();
 				}
 
-				// Handle Drag & Drop Pushing
 				Event evt = Event.current;
 				if ((evt.type == EventType.DragUpdated || evt.type == EventType.DragPerform) && r.Contains(evt.mousePosition))
 				{
@@ -68,7 +90,14 @@ namespace NestedSO.SOEditor
 							{
 								if (listType == null || listType.IsAssignableFrom(so.GetType()))
 								{
-									PushAssetToList(so, listProp, wrapperProp.serializedObject.targetObject);
+									ScriptableObject clone = NestedSOEditorUtils.PushExternalAsset(so, wrapperProp.serializedObject.targetObject);
+									if (clone != null)
+									{
+										listProp.arraySize++;
+										listProp.GetArrayElementAtIndex(listProp.arraySize - 1).objectReferenceValue = clone;
+										listProp.serializedObject.ApplyModifiedProperties();
+										AssetDatabase.SaveAssets();
+									}
 								}
 							}
 						}
@@ -103,23 +132,46 @@ namespace NestedSO.SOEditor
 				if (GUI.Button(menuBtnRect, menuIcon, new GUIStyle("IconButton")))
 				{
 					GenericMenu menu = new GenericMenu();
-
 					int capturedIndex = index;
 					string propertyPath = listProp.propertyPath;
 					SerializedObject serializedObject = listProp.serializedObject;
 
+					menu.AddItem(new GUIContent("Duplicate"), false, () =>
+					{
+						serializedObject.Update();
+						var prop = serializedObject.FindProperty(propertyPath);
+						ScriptableObject clone = NestedSOEditorUtils.DuplicateSubAsset(item, serializedObject.targetObject);
+
+						prop.InsertArrayElementAtIndex(capturedIndex + 1);
+						prop.GetArrayElementAtIndex(capturedIndex + 1).objectReferenceValue = clone;
+						prop.serializedObject.ApplyModifiedProperties();
+						AssetDatabase.SaveAssets();
+					});
+					menu.AddSeparator("");
 					menu.AddItem(new GUIContent("Pop"), false, () =>
 					{
 						serializedObject.Update();
 						var prop = serializedObject.FindProperty(propertyPath);
-						PopAssetFromList(item, prop, capturedIndex);
+						if (NestedSOEditorUtils.PopSubAsset(item, out _))
+						{
+							prop.GetArrayElementAtIndex(capturedIndex).objectReferenceValue = null;
+							prop.DeleteArrayElementAtIndex(capturedIndex);
+							prop.serializedObject.ApplyModifiedProperties();
+							AssetDatabase.SaveAssets();
+						}
 					});
 					menu.AddSeparator("");
 					menu.AddItem(new GUIContent("Remove"), false, () =>
 					{
 						serializedObject.Update();
 						var prop = serializedObject.FindProperty(propertyPath);
-						RemoveItem(prop, capturedIndex);
+
+						NestedSOEditorUtils.DestroyAsset(item);
+
+						prop.GetArrayElementAtIndex(capturedIndex).objectReferenceValue = null;
+						prop.DeleteArrayElementAtIndex(capturedIndex);
+						prop.serializedObject.ApplyModifiedProperties();
+						AssetDatabase.SaveAssets();
 					});
 
 					menu.ShowAsContext();
@@ -155,142 +207,7 @@ namespace NestedSO.SOEditor
 			menu.ShowAsContext();
 		}
 
-		// =================================================================================================
-		// PUSH & POP LOGIC
-		// =================================================================================================
-
-		private static List<ScriptableObject> GetNestedAssetsRecursive(ScriptableObject root)
-		{
-			var result = new List<ScriptableObject>();
-			if (root == null) return result;
-
-			if (root is NestedSOCollectionBase internalCollection)
-			{
-				var items = internalCollection.GetRawItems();
-				for (int i = items.Count - 1; i >= 0; i--)
-				{
-					if (items[i] != null)
-					{
-						result.Add(items[i]);
-						result.AddRange(GetNestedAssetsRecursive(items[i]));
-					}
-				}
-			}
-
-			// Inheritance-Supported Reflection
-			var fieldsList = new List<System.Reflection.FieldInfo>();
-			Type currentType = root.GetType();
-
-			while (currentType != null && currentType != typeof(ScriptableObject) && currentType != typeof(UnityEngine.Object))
-			{
-				var declaredFields = currentType.GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly);
-				foreach (var f in declaredFields)
-				{
-					if (typeof(NestedSOListBase).IsAssignableFrom(f.FieldType))
-					{
-						fieldsList.Add(f);
-					}
-				}
-				currentType = currentType.BaseType;
-			}
-
-			foreach (var field in fieldsList)
-			{
-				var listWrapper = field.GetValue(root);
-				if (listWrapper != null)
-				{
-					System.Reflection.FieldInfo itemsField = null;
-					Type searchFieldType = field.FieldType;
-
-					while (searchFieldType != null)
-					{
-						itemsField = searchFieldType.GetField("Items", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.DeclaredOnly);
-						if (itemsField != null) break;
-						searchFieldType = searchFieldType.BaseType;
-					}
-
-					if (itemsField != null)
-					{
-						if (itemsField.GetValue(listWrapper) is System.Collections.IList list)
-						{
-							for (int i = list.Count - 1; i >= 0; i--)
-							{
-								var child = list[i] as ScriptableObject;
-								if (child != null)
-								{
-									result.Add(child);
-									result.AddRange(GetNestedAssetsRecursive(child));
-								}
-							}
-						}
-					}
-				}
-			}
-			return result.Distinct().ToList();
-		}
-
-		private void PushAssetToList(ScriptableObject externalAsset, SerializedProperty listProp, UnityEngine.Object rootObject)
-		{
-			if (!EditorUtility.DisplayDialog("Push Asset", $"Merging '{externalAsset.name}' into this list will delete the standalone file.\n\nContinue?", "Yes, Push It", "Cancel"))
-				return;
-
-			string oldPath = AssetDatabase.GetAssetPath(externalAsset);
-			var nestedAssets = GetNestedAssetsRecursive(externalAsset);
-
-			ScriptableObject clonedParent = UnityEngine.Object.Instantiate(externalAsset);
-			clonedParent.name = externalAsset.name;
-
-			AssetDatabase.AddObjectToAsset(clonedParent, rootObject);
-
-			listProp.arraySize++;
-			var element = listProp.GetArrayElementAtIndex(listProp.arraySize - 1);
-			element.objectReferenceValue = clonedParent;
-			listProp.serializedObject.ApplyModifiedProperties();
-
-			foreach (var child in nestedAssets)
-			{
-				if (child != null && AssetDatabase.GetAssetPath(child) == oldPath && !AssetDatabase.IsMainAsset(child))
-				{
-					AssetDatabase.RemoveObjectFromAsset(child);
-					AssetDatabase.AddObjectToAsset(child, rootObject);
-				}
-			}
-
-			AssetDatabase.DeleteAsset(oldPath);
-			AssetDatabase.SaveAssets();
-		}
-
-		private void PopAssetFromList(ScriptableObject subAsset, SerializedProperty listProp, int index)
-		{
-			string path = EditorUtility.SaveFilePanelInProject("Pop Asset", subAsset.name, "asset", "Choose location to extract to.");
-			if (string.IsNullOrEmpty(path)) return;
-
-			string oldPath = AssetDatabase.GetAssetPath(subAsset);
-			var nestedAssets = GetNestedAssetsRecursive(subAsset);
-
-			var element = listProp.GetArrayElementAtIndex(index);
-			element.objectReferenceValue = null;
-			listProp.DeleteArrayElementAtIndex(index);
-			listProp.serializedObject.ApplyModifiedProperties();
-
-			AssetDatabase.RemoveObjectFromAsset(subAsset);
-			AssetDatabase.CreateAsset(subAsset, path);
-
-			foreach (var child in nestedAssets)
-			{
-				if (child != null && AssetDatabase.GetAssetPath(child) == oldPath && !AssetDatabase.IsMainAsset(child))
-				{
-					AssetDatabase.RemoveObjectFromAsset(child);
-					AssetDatabase.AddObjectToAsset(child, subAsset);
-				}
-			}
-
-			AssetDatabase.SaveAssets();
-		}
-
-		// =================================================================================================
-		// STATIC PUBLIC API
-		// =================================================================================================
+		#region Static Public API
 
 		public static ScriptableObject CreateAndAddAsset(SerializedProperty listProp, Type type, string name = null)
 		{
@@ -310,14 +227,10 @@ namespace NestedSO.SOEditor
 			SerializedProperty element = listProp.GetArrayElementAtIndex(index);
 			ScriptableObject asset = element.objectReferenceValue as ScriptableObject;
 
-			if (asset != null)
-			{
-				NestedSOAssetUtils.DestroyAsset(asset);
-			}
+			if (asset != null) NestedSOEditorUtils.DestroyAsset(asset);
 
 			element.objectReferenceValue = null;
 			listProp.DeleteArrayElementAtIndex(index);
-
 			listProp.serializedObject.ApplyModifiedProperties();
 			AssetDatabase.SaveAssets();
 		}
@@ -352,11 +265,13 @@ namespace NestedSO.SOEditor
 				listMember.Remove(asset);
 			}
 
-			NestedSOAssetUtils.DestroyAsset(asset);
+			NestedSOEditorUtils.DestroyAsset(asset);
 
 			EditorUtility.SetDirty(parentAsset);
 			AssetDatabase.SaveAssets();
 		}
+
+		#endregion
 	}
 }
 #endif
