@@ -399,6 +399,45 @@ namespace NestedSO.SOEditor
 			AssetDatabase.SaveAssets();
 		}
 
+		public static void MoveSubAssetToList(ScriptableObject subAsset, ScriptableObject sourceRoot, NestedSOListBase sourceList, ScriptableObject targetRoot, NestedSOListBase targetList)
+		{
+			if (subAsset == null || sourceRoot == null || targetRoot == null) return;
+
+			string oldRootPath = AssetDatabase.GetAssetPath(sourceRoot);
+			var nestedAssets = GetNestedAssetsRecursive(subAsset);
+
+			// 1. Detach from old list
+			if (sourceList != null && sourceList.Contains(subAsset))
+			{
+				sourceList.Remove(subAsset);
+			}
+
+			// 2. Move main asset
+			AssetDatabase.RemoveObjectFromAsset(subAsset);
+			AssetDatabase.AddObjectToAsset(subAsset, targetRoot);
+
+			// 3. Move all nested sub-assets
+			foreach (var child in nestedAssets)
+			{
+				if (child != null && AssetDatabase.GetAssetPath(child) == oldRootPath && !AssetDatabase.IsMainAsset(child))
+				{
+					AssetDatabase.RemoveObjectFromAsset(child);
+					AssetDatabase.AddObjectToAsset(child, targetRoot);
+				}
+			}
+
+			// 4. Attach to new list
+			if (targetList != null && !targetList.Contains(subAsset))
+			{
+				targetList.Add(subAsset);
+			}
+
+			EditorUtility.SetDirty(sourceRoot);
+			EditorUtility.SetDirty(targetRoot);
+			EditorUtility.SetDirty(subAsset);
+			AssetDatabase.SaveAssets();
+		}
+
 		public static void DestroyAsset(ScriptableObject asset)
 		{
 			if (asset == null) return;
