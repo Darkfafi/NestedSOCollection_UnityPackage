@@ -367,6 +367,24 @@ namespace NestedSO.SOEditor
 					AssetDatabase.SaveAssets();
 					EditorUtility.SetDirty(collection);
 				});
+
+				var compatibleCollections = NestedSOEditorUtils.FindCompatibleCollections(nestedItem.GetType(), collection);
+				if (compatibleCollections.Count > 0)
+				{
+					foreach (var targetCol in compatibleCollections)
+					{
+						var tCol = targetCol; // Capture for lambda
+						menu.AddItem(new GUIContent($"Move to.../{tCol.name}"), false, () =>
+						{
+							NestedSOEditorUtils.MoveSubAssetToCollection(nestedItem, collection, tCol);
+						});
+					}
+				}
+				else
+				{
+					menu.AddDisabledItem(new GUIContent("Move to... (No compatible collections)"));
+				}
+
 				menu.AddSeparator("");
 				menu.AddItem(new GUIContent("Pop"), false, () =>
 				{

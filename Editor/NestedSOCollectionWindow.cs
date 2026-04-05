@@ -246,6 +246,9 @@ namespace NestedSO.SOEditor
 					string propertyPath = _itemsListProperty.propertyPath;
 					SerializedObject serializedObject = _itemsListProperty.serializedObject;
 
+					// Root Collection needed for Move
+					NestedSOCollectionBase currentCollection = serializedObject.targetObject as NestedSOCollectionBase;
+
 					menu.AddItem(new GUIContent("Duplicate"), false, () =>
 					{
 						serializedObject.Update();
@@ -256,8 +259,29 @@ namespace NestedSO.SOEditor
 						prop.serializedObject.ApplyModifiedProperties();
 						AssetDatabase.SaveAssets();
 					});
+
+					if (currentCollection != null)
+					{
+						var compatibleCollections = NestedSOEditorUtils.FindCompatibleCollections(item.GetType(), currentCollection);
+						if (compatibleCollections.Count > 0)
+						{
+							foreach (var targetCol in compatibleCollections)
+							{
+								var tCol = targetCol;
+								menu.AddItem(new GUIContent($"Move to.../{tCol.name}"), false, () =>
+								{
+									NestedSOEditorUtils.MoveSubAssetToCollection(item, currentCollection, tCol);
+								});
+							}
+						}
+						else
+						{
+							menu.AddDisabledItem(new GUIContent("Move to... (No compatible collections)"));
+						}
+					}
+
 					menu.AddSeparator("");
-					menu.AddItem(new GUIContent("Pop"), false, () =>
+					menu.AddItem(new GUIContent("Pop (Extract to File)"), false, () =>
 					{
 						serializedObject.Update();
 						var prop = serializedObject.FindProperty(propertyPath);

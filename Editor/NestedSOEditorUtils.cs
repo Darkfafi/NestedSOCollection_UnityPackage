@@ -10,8 +10,6 @@ namespace NestedSO.SOEditor
 {
 	public static class NestedSOEditorUtils
 	{
-
-
 		public static void PushAssetToCollection(NestedSOCollectionBase collection, ScriptableObject externalAsset)
 		{
 			ScriptableObject clone = NestedSOEditorUtils.PushExternalAsset(externalAsset, collection);
@@ -69,7 +67,6 @@ namespace NestedSO.SOEditor
 			collection._MarkAsAddedAsset(nestedSOItemInstance);
 			return nestedSOItemInstance;
 		}
-
 
 		public static Type GetBaseTypeFromCollection(NestedSOCollectionBase collection)
 		{
@@ -344,6 +341,62 @@ namespace NestedSO.SOEditor
 				EditorUtility.ClearProgressBar();
 				AssetDatabase.SaveAssets();
 			}
+		}
+
+		public static List<NestedSOCollectionBase> FindCompatibleCollections(Type itemType, NestedSOCollectionBase excludeCollection)
+		{
+			List<NestedSOCollectionBase> result = new List<NestedSOCollectionBase>();
+			string[] guids = AssetDatabase.FindAssets("t:NestedSOCollectionBase");
+
+			foreach (string guid in guids)
+			{
+				string path = AssetDatabase.GUIDToAssetPath(guid);
+				var collection = AssetDatabase.LoadAssetAtPath<NestedSOCollectionBase>(path);
+				if (collection == null || collection == excludeCollection) continue;
+
+				Type baseType = GetBaseTypeFromCollection(collection);
+				if (baseType != null && baseType.IsAssignableFrom(itemType))
+				{
+					result.Add(collection);
+				}
+			}
+
+			return result;
+		}
+
+		public static void MoveSubAssetToCollection(ScriptableObject subAsset, NestedSOCollectionBase sourceCollection, NestedSOCollectionBase targetCollection)
+		{
+			if (subAsset == null || sourceCollection == null || targetCollection == null) return;
+
+			string oldRootPath = AssetDatabase.GetAssetPath(sourceCollection);
+			var nestedAssets = GetNestedAssetsRecursive(subAsset);
+
+			// 1. Detach from old collection
+			sourceCollection._RemoveAsset(subAsset);
+			sourceCollection._MarkAsRemovedAsset(subAsset);
+
+			// 2. Move main asset
+			AssetDatabase.RemoveObjectFromAsset(subAsset);
+			AssetDatabase.AddObjectToAsset(subAsset, targetCollection);
+
+			// 3. Move all nested sub-assets
+			foreach (var child in nestedAssets)
+			{
+				if (child != null && AssetDatabase.GetAssetPath(child) == oldRootPath && !AssetDatabase.IsMainAsset(child))
+				{
+					AssetDatabase.RemoveObjectFromAsset(child);
+					AssetDatabase.AddObjectToAsset(child, targetCollection);
+				}
+			}
+
+			// 4. Attach to new collection
+			targetCollection._AddAsset(subAsset);
+			targetCollection._MarkAsAddedAsset(subAsset);
+
+			EditorUtility.SetDirty(sourceCollection);
+			EditorUtility.SetDirty(targetCollection);
+			EditorUtility.SetDirty(subAsset);
+			AssetDatabase.SaveAssets();
 		}
 
 		public static void DestroyAsset(ScriptableObject asset)
