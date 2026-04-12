@@ -173,6 +173,3 @@ To ensure your **`SOQueryDatabase`** cache is always up-to-date with the latest 
 
 * You can toggle this feature from the top toolbar: **Tools > NestedSO > Auto Refresh On Play**.
 * It is also available as a toggle at the bottom of the **`SOQueryDatabase`** inspector.
-```
-
----
