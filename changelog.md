@@ -1,5 +1,15 @@
 # Changelog NestedSOCollection
 
+## v2.1.0 - 12/04/2026
+* `NestedSOCollection` & `NestedSOList` Editor Workflow Enhancements
+	- **Push:** Drag and drop external standalone `ScriptableObject`s directly onto the list header to securely merge them (and all their infinite-depth nested sub-assets) into the collection/list.
+	- **Pop:** Extract a nested sub-asset out of the collection/list into its own standalone `.asset` file via the new (⋮) hamburger menu. Deeply nested children are automatically extracted and re-linked safely.
+	- **Bulk Pop:** Added a "Pop Range" / "Bulk Pop" button to extract all currently filtered or searched items into a selected folder at once.
+	- **Move:** Instantly transfer a nested sub-asset (and its children) to another compatible `NestedSOCollection` directly from the (⋮) menu, skipping the need to extract to a file first.
+	- **Duplicate:** Added a duplicate action to the (⋮) menu that performs a true deep copy of the asset and all its nested lists/collections.
+* `NestedSOCollectionBase<T>`
+	- Added `SortItems` method to easily reorder your nested items at runtime.
+
 ## v2.0.0 - 18/02/2026
 * `SOQueryDatabase`
 	- When you create the `SOQueryDatabase` through the _NestedSO -> SOQueryDatabase_ Context Menu, you can build the Database by inheriting `SOQueryEntity` (or `ISOQueryEntity`). Through `SOQueryTags`, these can be labelled. And then through `SOQueryDatabase.Find<TargetSO>("Tag1", "Tag2")`, you can query to get a list of TargetSO type matching the given tags. 
