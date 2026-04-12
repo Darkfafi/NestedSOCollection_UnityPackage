@@ -9,6 +9,7 @@
 	- **Duplicate:** Added a duplicate action to the (⋮) menu that performs a true deep copy of the asset and all its nested lists/collections.
 * `NestedSOCollectionBase<T>`
 	- Added `SortItems` method to easily reorder your nested items at runtime.
+* Renamed `NestedSOAssetUtils` to `NestedSOEditorUtils`
 
 ## v2.0.0 - 18/02/2026
 * `SOQueryDatabase`
