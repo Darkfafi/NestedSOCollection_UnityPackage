@@ -58,6 +58,7 @@ namespace NestedSO.Processor
 			}
 		}
 
+		[MenuItem("Tools/NestedSO/Refresh All Databases")]
 		public static void RefreshAllDatabases()
 		{
 			string[] guids = AssetDatabase.FindAssets($"t:{nameof(SOQueryDatabase)}");

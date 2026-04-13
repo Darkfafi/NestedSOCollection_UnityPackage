@@ -51,7 +51,6 @@ namespace NestedSO.SOEditor
 			var win = GetOrCreateWindow(listWrapperProperty);
 			if (item != null)
 			{
-				// Push breadcrumb if not already at the end
 				if (win._breadcrumbs.LastOrDefault() != item)
 				{
 					win._breadcrumbs.Clear();
@@ -64,14 +63,9 @@ namespace NestedSO.SOEditor
 
 		private static NestedSOCollectionWindow GetOrCreateWindow(SerializedProperty prop)
 		{
-			// Try to find an existing window targeting this property
 			var wins = Resources.FindObjectsOfTypeAll<NestedSOCollectionWindow>();
-			foreach (var w in wins)
-			{
-				if (w.IsTargeting(prop)) return w;
-			}
+			foreach (var w in wins) if (w.IsTargeting(prop)) return w;
 
-			// Create new instance if none found
 			var newWin = CreateInstance<NestedSOCollectionWindow>();
 			newWin.titleContent = new GUIContent(prop.displayName);
 			newWin.Init(prop);
@@ -88,7 +82,6 @@ namespace NestedSO.SOEditor
 		{
 			_targetSO = listWrapperProperty.serializedObject;
 			_propertyPath = listWrapperProperty.propertyPath;
-
 			_breadcrumbs.Clear();
 			_searchString = "";
 			_filteredItems.Clear();
@@ -97,20 +90,12 @@ namespace NestedSO.SOEditor
 			_scrollPosition = Vector2.zero;
 		}
 
-		private void OnEnable()
-		{
-			_searchField = new SearchField();
-		}
+		private void OnEnable() => _searchField = new SearchField();
 
 		private void OnGUI()
 		{
 			bool isValid = false;
-			try
-			{
-				// Validate if target object still exists
-				if (_targetSO != null && _targetSO.targetObject != null) isValid = true;
-			}
-			catch { }
+			try { if (_targetSO != null && _targetSO.targetObject != null) isValid = true; } catch { }
 
 			if (!isValid)
 			{
@@ -133,18 +118,9 @@ namespace NestedSO.SOEditor
 
 			_scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
 
-			if (!string.IsNullOrEmpty(_searchString))
-			{
-				DrawSearchResults();
-			}
-			else if (_breadcrumbs.Count > 0)
-			{
-				DrawDeepDive();
-			}
-			else
-			{
-				DrawRootList();
-			}
+			if (!string.IsNullOrEmpty(_searchString)) DrawSearchResults();
+			else if (_breadcrumbs.Count > 0) DrawDeepDive();
+			else DrawRootList();
 
 			EditorGUILayout.EndScrollView();
 			_targetSO.ApplyModifiedProperties();
@@ -189,9 +165,7 @@ namespace NestedSO.SOEditor
 		private void DrawRootList()
 		{
 			if (_reorderableList != null && _reorderableList.serializedProperty.propertyPath != _itemsListProperty.propertyPath)
-			{
 				_reorderableList = null;
-			}
 
 			if (_reorderableList == null) InitReorderableList();
 
@@ -202,7 +176,39 @@ namespace NestedSO.SOEditor
 		{
 			_reorderableList = new ReorderableList(_targetSO, _itemsListProperty, true, true, true, true);
 
-			_reorderableList.drawHeaderCallback = (Rect r) => EditorGUI.LabelField(r, _listWrapperProperty.displayName);
+			_reorderableList.drawHeaderCallback = (Rect r) =>
+			{
+				EditorGUI.LabelField(r, _listWrapperProperty.displayName + " (Drag & Drop to Push)");
+
+				Event evt = Event.current;
+				if ((evt.type == EventType.DragUpdated || evt.type == EventType.DragPerform) && r.Contains(evt.mousePosition))
+				{
+					DragAndDrop.visualMode = DragAndDropVisualMode.Copy;
+					if (evt.type == EventType.DragPerform)
+					{
+						DragAndDrop.AcceptDrag();
+						Type elementType = GetListElementType();
+						foreach (var obj in DragAndDrop.objectReferences)
+						{
+							if (obj is ScriptableObject so && AssetDatabase.IsMainAsset(so))
+							{
+								if (elementType == null || elementType.IsAssignableFrom(so.GetType()))
+								{
+									ScriptableObject clone = NestedSOEditorUtils.PushExternalAsset(so, _targetSO.targetObject);
+									if (clone != null)
+									{
+										_itemsListProperty.arraySize++;
+										_itemsListProperty.GetArrayElementAtIndex(_itemsListProperty.arraySize - 1).objectReferenceValue = clone;
+										_itemsListProperty.serializedObject.ApplyModifiedProperties();
+										AssetDatabase.SaveAssets();
+									}
+								}
+							}
+						}
+					}
+					evt.Use();
+				}
+			};
 
 			_reorderableList.drawElementCallback = (Rect rect, int index, bool isActive, bool isFocused) =>
 			{
@@ -217,38 +223,122 @@ namespace NestedSO.SOEditor
 					return;
 				}
 
-				float btnWidth = 50;
-				float nameWidth = rect.width - btnWidth - 5;
+				float editBtnW = 50; float menuBtnW = 24; float nameW = rect.width - editBtnW - menuBtnW - 5;
 
-				string newName = EditorGUI.TextField(new Rect(rect.x, rect.y + 1, nameWidth, EditorGUIUtility.singleLineHeight), item.name);
+				string newName = EditorGUI.TextField(new Rect(rect.x, rect.y + 1, nameW, EditorGUIUtility.singleLineHeight), item.name);
 				if (newName != item.name) { item.name = newName; EditorUtility.SetDirty(item); }
 
-				if (GUI.Button(new Rect(rect.x + rect.width - btnWidth, rect.y, btnWidth, EditorGUIUtility.singleLineHeight), "Edit"))
+				Rect editBtnRect = new Rect(rect.x + nameW + 2, rect.y, editBtnW, EditorGUIUtility.singleLineHeight);
+				if (GUI.Button(editBtnRect, "Edit"))
 				{
 					_breadcrumbs.Add(item);
 					_searchString = "";
 					GUI.FocusControl(null);
 				}
+
+				Rect menuBtnRect = new Rect(editBtnRect.xMax + 2, rect.y, menuBtnW, EditorGUIUtility.singleLineHeight);
+				GUIContent menuIcon = EditorGUIUtility.IconContent("pane options");
+				if (GUI.Button(menuBtnRect, menuIcon, new GUIStyle("IconButton")))
+				{
+					GenericMenu menu = new GenericMenu();
+
+					int capturedIndex = index;
+					string propertyPath = _itemsListProperty.propertyPath;
+					SerializedObject serializedObject = _itemsListProperty.serializedObject;
+
+					// Root Collection needed for Move
+					NestedSOCollectionBase currentCollection = serializedObject.targetObject as NestedSOCollectionBase;
+
+					menu.AddItem(new GUIContent("Duplicate"), false, () =>
+					{
+						serializedObject.Update();
+						var prop = serializedObject.FindProperty(propertyPath);
+						ScriptableObject clone = NestedSOEditorUtils.DuplicateSubAsset(item, serializedObject.targetObject);
+						prop.InsertArrayElementAtIndex(capturedIndex + 1);
+						prop.GetArrayElementAtIndex(capturedIndex + 1).objectReferenceValue = clone;
+						prop.serializedObject.ApplyModifiedProperties();
+						AssetDatabase.SaveAssets();
+					});
+
+					if (currentCollection != null)
+					{
+						var compatibleCollections = NestedSOEditorUtils.FindCompatibleCollections(item.GetType(), currentCollection);
+						if (compatibleCollections.Count > 0)
+						{
+							foreach (var targetCol in compatibleCollections)
+							{
+								var tCol = targetCol;
+								menu.AddItem(new GUIContent($"Move to.../{tCol.name}"), false, () =>
+								{
+									NestedSOEditorUtils.MoveSubAssetToCollection(item, currentCollection, tCol);
+								});
+							}
+						}
+						else
+						{
+							menu.AddDisabledItem(new GUIContent("Move to... (No compatible collections)"));
+						}
+					}
+
+					menu.AddSeparator("");
+					menu.AddItem(new GUIContent("Pop (Extract to File)"), false, () =>
+					{
+						serializedObject.Update();
+						var prop = serializedObject.FindProperty(propertyPath);
+						if (NestedSOEditorUtils.PopSubAsset(item, out _))
+						{
+							prop.GetArrayElementAtIndex(capturedIndex).objectReferenceValue = null;
+							prop.DeleteArrayElementAtIndex(capturedIndex);
+							prop.serializedObject.ApplyModifiedProperties();
+							AssetDatabase.SaveAssets();
+						}
+					});
+					menu.AddSeparator("");
+					menu.AddItem(new GUIContent("Remove"), false, () =>
+					{
+						serializedObject.Update();
+						var prop = serializedObject.FindProperty(propertyPath);
+						NestedSOEditorUtils.DestroyAsset(item);
+						prop.GetArrayElementAtIndex(capturedIndex).objectReferenceValue = null;
+						prop.DeleteArrayElementAtIndex(capturedIndex);
+						prop.serializedObject.ApplyModifiedProperties();
+						AssetDatabase.SaveAssets();
+					});
+
+					menu.ShowAsContext();
+				}
 			};
 
 			_reorderableList.onAddDropdownCallback = (Rect r, ReorderableList l) => ShowAddMenu(_itemsListProperty);
-			_reorderableList.onRemoveCallback = (ReorderableList l) => RemoveItem(_itemsListProperty, l.index);
+			_reorderableList.onRemoveCallback = (ReorderableList l) =>
+			{
+				SerializedProperty element = _itemsListProperty.GetArrayElementAtIndex(l.index);
+				ScriptableObject item = element.objectReferenceValue as ScriptableObject;
+				if (item != null) NestedSOEditorUtils.DestroyAsset(item);
+				element.objectReferenceValue = null;
+				_itemsListProperty.DeleteArrayElementAtIndex(l.index);
+				_itemsListProperty.serializedObject.ApplyModifiedProperties();
+				AssetDatabase.SaveAssets();
+			};
 		}
 
-		private void ShowAddMenu(SerializedProperty listProp)
+		private Type GetListElementType()
 		{
-			Type listType = null;
 			Type wrapperType = GetTargetTypeFromPath(_targetSO.targetObject.GetType(), _propertyPath);
-
 			if (wrapperType != null)
 			{
 				var itemsField = wrapperType.GetField("Items", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 				if (itemsField != null && itemsField.FieldType.IsGenericType)
 				{
-					listType = itemsField.FieldType.GetGenericArguments()[0];
+					return itemsField.FieldType.GetGenericArguments()[0];
 				}
 			}
+			return null;
+		}
 
+		private void ShowAddMenu(SerializedProperty listProp)
+		{
+			Type listType = GetListElementType();
 			if (listType == null) return;
 
 			GenericMenu menu = new GenericMenu();
@@ -256,7 +346,21 @@ namespace NestedSO.SOEditor
 			if (!listType.IsAbstract && !listType.IsInterface && typeof(ScriptableObject).IsAssignableFrom(listType))
 				if (!types.Contains(listType)) types.Insert(0, listType);
 
-			foreach (var t in types) menu.AddItem(new GUIContent(t.Name), false, () => CreateAndAddAsset(listProp, t));
+			foreach (var t in types)
+			{
+				menu.AddItem(new GUIContent(t.Name), false, () =>
+				{
+					ScriptableObject newAsset = ScriptableObject.CreateInstance(t);
+					newAsset.name = "New " + t.Name;
+					AssetDatabase.AddObjectToAsset(newAsset, listProp.serializedObject.targetObject);
+					AssetDatabase.SaveAssets();
+
+					listProp.arraySize++;
+					SerializedProperty element = listProp.GetArrayElementAtIndex(listProp.arraySize - 1);
+					element.objectReferenceValue = newAsset;
+					listProp.serializedObject.ApplyModifiedProperties();
+				});
+			}
 			menu.ShowAsContext();
 		}
 
@@ -283,35 +387,6 @@ namespace NestedSO.SOEditor
 				currentType = field.FieldType;
 			}
 			return currentType;
-		}
-
-		private void CreateAndAddAsset(SerializedProperty listProp, Type type)
-		{
-			ScriptableObject newAsset = ScriptableObject.CreateInstance(type);
-			newAsset.name = "New " + type.Name;
-			AssetDatabase.AddObjectToAsset(newAsset, listProp.serializedObject.targetObject);
-			AssetDatabase.SaveAssets();
-
-			listProp.arraySize++;
-			SerializedProperty element = listProp.GetArrayElementAtIndex(listProp.arraySize - 1);
-			element.objectReferenceValue = newAsset;
-			listProp.serializedObject.ApplyModifiedProperties();
-		}
-
-		private void RemoveItem(SerializedProperty listProp, int index)
-		{
-			SerializedProperty element = listProp.GetArrayElementAtIndex(index);
-			ScriptableObject asset = element.objectReferenceValue as ScriptableObject;
-
-			if (asset != null)
-			{
-				NestedSOAssetUtils.DestroyAsset(asset);
-			}
-
-			element.objectReferenceValue = null;
-			listProp.DeleteArrayElementAtIndex(index);
-			listProp.serializedObject.ApplyModifiedProperties();
-			AssetDatabase.SaveAssets();
 		}
 
 		private void DrawDeepDive()
@@ -343,6 +418,35 @@ namespace NestedSO.SOEditor
 		{
 			if (_filteredItems.Count > 0)
 			{
+				EditorGUILayout.BeginHorizontal();
+				GUILayout.Label($"Results: {_filteredItems.Count}", EditorStyles.boldLabel);
+				GUILayout.FlexibleSpace();
+				if (GUILayout.Button("Pop Range", GUILayout.Width(150)))
+				{
+					List<ScriptableObject> itemsToPop = _filteredItems.Select(x => x.Item).ToList();
+
+					NestedSOEditorUtils.PopRangeSubAssets(itemsToPop, (poppedAsset) =>
+					{
+						for (int j = _itemsListProperty.arraySize - 1; j >= 0; j--)
+						{
+							if (_itemsListProperty.GetArrayElementAtIndex(j).objectReferenceValue == poppedAsset)
+							{
+								_itemsListProperty.GetArrayElementAtIndex(j).objectReferenceValue = null;
+								_itemsListProperty.DeleteArrayElementAtIndex(j);
+								break;
+							}
+						}
+						_itemsListProperty.serializedObject.ApplyModifiedProperties();
+					});
+
+					_searchString = "";
+					_filteredItems.Clear();
+					GUI.FocusControl(null);
+					GUIUtility.ExitGUI();
+				}
+				EditorGUILayout.EndHorizontal();
+				EditorGUILayout.Space(5);
+
 				DrawMassEdit();
 				foreach (var match in _filteredItems)
 				{

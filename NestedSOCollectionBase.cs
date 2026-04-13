@@ -25,7 +25,7 @@ namespace NestedSO
 
 		internal override void _AddAsset(ScriptableObject item)
 		{
-			if(item is NestedSOItemT castedItem)
+			if (item is NestedSOItemT castedItem)
 			{
 				_nestedSOItems.Add(castedItem);
 			}
@@ -33,7 +33,7 @@ namespace NestedSO
 
 		internal override void _RemoveAsset(ScriptableObject item)
 		{
-			if(item is NestedSOItemT castedItem)
+			if (item is NestedSOItemT castedItem)
 			{
 				_nestedSOItems.Remove(castedItem);
 			}
@@ -41,7 +41,7 @@ namespace NestedSO
 
 		internal override bool _HasAsset(ScriptableObject item)
 		{
-			if(item is NestedSOItemT castedItem)
+			if (item is NestedSOItemT castedItem)
 			{
 				return _nestedSOItems.Contains(castedItem);
 			}
@@ -50,7 +50,7 @@ namespace NestedSO
 
 		internal override void _MarkAsAddedAsset(ScriptableObject item)
 		{
-			if(item is NestedSOItemT castedAsset)
+			if (item is NestedSOItemT castedAsset)
 			{
 				OnAddedAsset(castedAsset);
 			}
@@ -58,7 +58,7 @@ namespace NestedSO
 
 		internal override void _MarkAsRemovedAsset(ScriptableObject item)
 		{
-			if(item is NestedSOItemT castedAsset)
+			if (item is NestedSOItemT castedAsset)
 			{
 				OnRemovedAsset(castedAsset);
 			}
@@ -68,9 +68,14 @@ namespace NestedSO
 
 		#region Public Methods
 
+		public void SortItems(Comparison<NestedSOItemT> comparison)
+		{
+			_nestedSOItems.Sort(comparison);
+		}
+
 		public void ForEach(Action<NestedSOItemT> action)
 		{
-			for(int i = 0, c = _nestedSOItems.Count; i < c; i++)
+			for (int i = 0, c = _nestedSOItems.Count; i < c; i++)
 			{
 				action(_nestedSOItems[i]);
 			}
@@ -78,7 +83,7 @@ namespace NestedSO
 
 		public void ForEachReversed(Action<NestedSOItemT> action)
 		{
-			for(int i = _nestedSOItems.Count - 1; i >= 0; i--)
+			for (int i = _nestedSOItems.Count - 1; i >= 0; i--)
 			{
 				action(_nestedSOItems[i]);
 			}
@@ -86,10 +91,10 @@ namespace NestedSO
 
 		public bool TryGetItem(Predicate<NestedSOItemT> predicate, out NestedSOItemT item)
 		{
-			for(int i = 0, c = _nestedSOItems.Count; i < c; i++)
+			for (int i = 0, c = _nestedSOItems.Count; i < c; i++)
 			{
 				item = _nestedSOItems[i];
-				if(predicate(item))
+				if (predicate(item))
 				{
 					return true;
 				}
@@ -100,10 +105,10 @@ namespace NestedSO
 
 		public bool TryGetItem<T>(out T item) where T : NestedSOItemT
 		{
-			for(int i = 0, c = _nestedSOItems.Count; i < c; i++)
+			for (int i = 0, c = _nestedSOItems.Count; i < c; i++)
 			{
 				NestedSOItemT baseItem = _nestedSOItems[i];
-				if(baseItem is T castedItem)
+				if (baseItem is T castedItem)
 				{
 					item = castedItem;
 					return true;
@@ -116,10 +121,10 @@ namespace NestedSO
 
 		public bool TryGetItem<T>(Predicate<T> predicate, out T item) where T : NestedSOItemT
 		{
-			for(int i = 0, c = _nestedSOItems.Count; i < c; i++)
+			for (int i = 0, c = _nestedSOItems.Count; i < c; i++)
 			{
 				NestedSOItemT baseItem = _nestedSOItems[i];
-				if(baseItem is T castedItem && predicate(castedItem))
+				if (baseItem is T castedItem && predicate(castedItem))
 				{
 					item = castedItem;
 					return true;
@@ -133,10 +138,10 @@ namespace NestedSO
 		public List<T> GetItems<T>() where T : NestedSOItemT
 		{
 			List<T> castedItems = new List<T>();
-			for(int i = 0, c = _nestedSOItems.Count; i < c; i++)
+			for (int i = 0, c = _nestedSOItems.Count; i < c; i++)
 			{
 				var item = _nestedSOItems[i];
-				if(item is T castedItem)
+				if (item is T castedItem)
 				{
 					castedItems.Add(castedItem);
 				}
@@ -147,10 +152,10 @@ namespace NestedSO
 		public List<T> GetItems<T>(Predicate<T> predicate) where T : NestedSOItemT
 		{
 			List<T> castedItems = new List<T>();
-			for(int i = 0, c = _nestedSOItems.Count; i < c; i++)
+			for (int i = 0, c = _nestedSOItems.Count; i < c; i++)
 			{
 				var item = _nestedSOItems[i];
-				if(item is T castedItem && predicate(castedItem))
+				if (item is T castedItem && predicate(castedItem))
 				{
 					castedItems.Add(castedItem);
 				}
@@ -170,7 +175,7 @@ namespace NestedSO
 
 		protected virtual void OnAddedAsset(NestedSOItemT asset)
 		{
-		
+
 		}
 
 		protected virtual void OnRemovedAsset(NestedSOItemT asset)

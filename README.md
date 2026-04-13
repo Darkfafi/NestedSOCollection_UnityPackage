@@ -6,6 +6,7 @@ This package allows you to deeply nest ScriptableObjects within each other as su
 
 ## 🌟 Core Features
 * **Sub-Asset Management:** Safely create, delete, and manage ScriptableObjects *inside* other ScriptableObjects without memory leaks or dangling references.
+* **Sub-Asset Migration:** Push external assets into collections, pop nested assets out into standalone files, or move them between collections instantly while preserving infinite nesting.
 * **Inline Editor Navigation:** Breadcrumbs, deep-dive inspectors, and search filters built directly into your default Inspector windows.
 * **Mass Property Editing:** Filter a list of nested objects and change a specific property across all of them simultaneously.
 * **High-Performance Query Database:** Look up items by ID or intersect Tags instantly. Uses integer-based serialized caching and granular lazy-loading.
@@ -22,6 +23,8 @@ Use it for clustering information together, such as a Level Collection containin
 * **Breadcrumb Navigation:** Dive deep into nested structures and navigate back up seamlessly.
 * **Deep-Dive Inspector:** Edit child ScriptableObjects directly within the parent's inspector.
 * **Advanced Search & Mass Edit:** Search by name, type, or property values. Select a filtered list and mass-apply property changes in one click.
+* **Push, Pop & Bulk Pop:** Drag and drop external assets to merge them into the collection, extract individual nested assets back into standalone `.asset` files via the (⋮) menu, or Bulk Pop entire filtered search results to a folder.
+* **Move:** Instantly transfer a nested item (and all its children) to another compatible collection directly from the (⋮) menu.
 
 ### How to use:
 Simply inherit from **`NestedSOCollectionBase<T>`**:
@@ -36,7 +39,6 @@ public class CharacterCollection : NestedSOCollectionBase<CharacterData>
     // That's it! The custom Editor will automatically handle creation,
     // deletion, and inline-editing of CharacterData sub-assets.
 }
-
 ```
 
 ---
@@ -50,6 +52,7 @@ While a Collection acts as a root asset, **`NestedSOList<T>`** allows you to emb
 * **Reorderable:** Drag and drop items easily.
 * **Polymorphic Creation:** A dropdown menu automatically finds all derived, non-abstract types of `T` to let you add variations of your base class.
 * **Inline Details Area:** Click "Search / Details" to open an embedded workspace right under the list for searching, mass-editing, and deep-dive inspections.
+* **Push, Pop & Bulk Pop:** Seamlessly merge external assets into the list or extract them out into standalone files while maintaining sub-asset integrity.
 
 ### How to use:
 
@@ -68,7 +71,6 @@ public class CharacterClass : ScriptableObject
     // save new Abilities as sub-assets of this CharacterClass.
     public NestedSOList<Ability> Abilities; 
 }
-
 ```
 
 ---
@@ -103,7 +105,6 @@ MissionData level1 = myDatabase.Get<MissionData>("Mission_01");
 
 // Fetch all items matching a set of tags
 List<WeaponData> fireSwords = myDatabase.Find<WeaponData>("Sword", "Fire", "Legendary");
-
 ```
 
 ---
@@ -160,7 +161,6 @@ public class SpellData : SOQueryEntity
         tags.AddRuntime(_spellElement.ToString());
     }
 }
-
 ```
 
 ---
@@ -173,5 +173,3 @@ To ensure your **`SOQueryDatabase`** cache is always up-to-date with the latest 
 
 * You can toggle this feature from the top toolbar: **Tools > NestedSO > Auto Refresh On Play**.
 * It is also available as a toggle at the bottom of the **`SOQueryDatabase`** inspector.
-
-```
