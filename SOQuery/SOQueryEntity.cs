@@ -29,10 +29,12 @@ namespace NestedSO
 
 		protected void RefreshEntity()
 		{
+#if UNITY_EDITOR
 			if (string.IsNullOrEmpty(Id))
 			{
 				Id = EDITOR_CreateId();
 			}
+#endif
 
 			_tags.ClearRuntime();
 			SyncTags(_tags);
